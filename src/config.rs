@@ -409,17 +409,17 @@ mod tests {
     /// it on drop — including on panic/unwind.  This avoids leaving sentinel
     /// values in the process environment if a test fails mid-way.
     ///
-    /// # Safety
-    /// `set_var` / `remove_var` are inherently unsafe in a multi-threaded
-    /// process.  Mark the test `#[serial]` (via `serial_test`) to serialise it
-    /// against other tests that read or write the same key.
+    /// `set_var` / `remove_var` are still `unsafe` on stable Rust; mark the
+    /// test `#[serial_test::serial]` to serialise it against other tests that
+    /// read or write the same key, since the process environment is global state.
     struct EnvGuard {
         key: &'static str,
     }
 
     impl EnvGuard {
         fn set(key: &'static str, value: &str) -> Self {
-            // SAFETY: caller must ensure single-threaded access (e.g. #[serial]).
+            // SAFETY: caller must hold #[serial_test::serial] to prevent
+            // concurrent access to the process environment from other tests.
             unsafe { std::env::set_var(key, value) };
             EnvGuard { key }
         }
