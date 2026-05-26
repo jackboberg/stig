@@ -96,6 +96,15 @@ pub struct CliOverrides {
 /// Resolved configuration for a `stig` invocation.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
+    /// The project root directory: the parent of the `stig.toml` file, or the
+    /// process CWD if no config file was found. All relative paths in the
+    /// config (`database_path`, `migrations_dir`, `backups_dir`,
+    /// `[[generate]].path`) should be resolved against this directory.
+    ///
+    /// Not serialized — populated by [`Config::load`].
+    #[serde(skip)]
+    pub project_root: PathBuf,
+
     /// Path to the live SQLite database.
     #[serde(default = "default_database_path")]
     pub database_path: String,
@@ -159,6 +168,7 @@ fn default_checksum_check() -> bool {
 impl Default for Config {
     fn default() -> Self {
         Self {
+            project_root: PathBuf::new(),
             database_path: default_database_path(),
             migrations_dir: default_migrations_dir(),
             backups_dir: default_backups_dir(),
@@ -219,11 +229,31 @@ impl Config {
                 let raw = std::fs::read_to_string(path).map_err(|e| {
                     CliError::Usage(format!("cannot read config file {}: {}", path.display(), e))
                 })?;
-                toml::from_str(&raw).map_err(|e| {
+                let mut cfg: Config = toml::from_str(&raw).map_err(|e| {
                     CliError::Usage(format!("invalid TOML in {}: {}", path.display(), e))
-                })?
+                })?;
+                // Set project_root to the directory containing the config file
+                // so callers can resolve relative paths correctly regardless of
+                // where the process CWD is.
+                cfg.project_root = path
+                    .parent()
+                    .unwrap_or(path)
+                    .to_path_buf()
+                    .canonicalize()
+                    .unwrap_or_else(|_| path.parent().unwrap_or(path).to_path_buf());
+                cfg
             }
-            None => Config::default(),
+            None => {
+                // No config file found — use start_dir or CWD as the project root.
+                let project_root = start_dir
+                    .map(|d| d.to_path_buf())
+                    .or_else(|| std::env::current_dir().ok())
+                    .unwrap_or_default();
+                Config {
+                    project_root,
+                    ..Config::default()
+                }
+            }
         };
 
         // Apply environment-variable overrides.
@@ -381,7 +411,14 @@ mod tests {
         // Use a temp dir that is guaranteed to contain no stig.toml.
         let dir = TempDir::new().unwrap();
         let cfg = Config::load(None, Some(&empty_env()), Some(dir.path())).unwrap();
-        assert_eq!(cfg, Config::default());
+        // Config values should all be defaults.
+        let defaults = Config::default();
+        assert_eq!(cfg.database_path, defaults.database_path);
+        assert_eq!(cfg.migrations_dir, defaults.migrations_dir);
+        assert_eq!(cfg.snapshot_keep, defaults.snapshot_keep);
+        assert_eq!(cfg.pragmas, defaults.pragmas);
+        // project_root should be set to the start_dir we passed.
+        assert_eq!(cfg.project_root, dir.path());
     }
 
     #[test]
@@ -399,7 +436,17 @@ mod tests {
     fn empty_config_file_returns_defaults() {
         let f = temp_toml("");
         let cfg = Config::load(Some(f.path()), Some(&empty_env()), None).unwrap();
-        assert_eq!(cfg, Config::default());
+        let defaults = Config::default();
+        assert_eq!(cfg.database_path, defaults.database_path);
+        assert_eq!(cfg.migrations_dir, defaults.migrations_dir);
+        assert_eq!(cfg.snapshot_keep, defaults.snapshot_keep);
+        assert_eq!(cfg.pragmas, defaults.pragmas);
+        assert_eq!(cfg.generate, defaults.generate);
+        // project_root should be the parent directory of the temp file.
+        assert_eq!(
+            cfg.project_root,
+            f.path().parent().unwrap().canonicalize().unwrap()
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -458,6 +505,10 @@ mod tests {
         assert_eq!(cfg.generate[0].kind, "typescript");
         assert_eq!(cfg.generate[0].path, "types.ts");
         assert_eq!(cfg.generate[0].exclude, vec!["sqlite_%".to_string()]);
+        assert_eq!(
+            cfg.project_root,
+            f.path().parent().unwrap().canonicalize().unwrap()
+        );
     }
 
     // -----------------------------------------------------------------------
