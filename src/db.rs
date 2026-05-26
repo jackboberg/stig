@@ -16,7 +16,7 @@
 //! skipped (WAL is incompatible with in-memory databases) and a warning is
 //! emitted.  Snapshot and reset operations are also disabled in this mode.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
@@ -51,22 +51,20 @@ impl Db {
         // Resolve relative paths against project_root so the correct database
         // is opened when the CLI is invoked from a subdirectory of the project.
         // Absolute paths and the special ":memory:" token are used as-is.
-        let resolved_path;
-        let path: &str = if is_memory || Path::new(raw).is_absolute() {
-            raw
+        // We keep the resolved value as a PathBuf so non-UTF-8 paths on Unix
+        // are handled correctly — rusqlite::Connection::open accepts AsRef<Path>.
+        let resolved: PathBuf = if is_memory || Path::new(raw).is_absolute() {
+            PathBuf::from(raw)
         } else {
-            resolved_path = config.project_root.join(raw);
-            resolved_path.to_str().with_context(|| {
-                format!("database path contains invalid UTF-8: {:?}", resolved_path)
-            })?
+            config.project_root.join(raw)
         };
 
         let conn = if is_memory {
             warn!("database_path is \":memory:\": snapshots and resets are disabled");
             Connection::open_in_memory().context("failed to open in-memory SQLite database")?
         } else {
-            Connection::open(path)
-                .with_context(|| format!("failed to open SQLite database at {path:?}"))?
+            Connection::open(&resolved)
+                .with_context(|| format!("failed to open SQLite database at {:?}", resolved))?
         };
 
         let db = Self { conn, is_memory };
