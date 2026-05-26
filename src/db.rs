@@ -16,6 +16,8 @@
 //! skipped (WAL is incompatible with in-memory databases) and a warning is
 //! emitted.  Snapshot and reset operations are also disabled in this mode.
 
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 use tracing::warn;
@@ -43,8 +45,21 @@ impl Db {
     ///   warning that snapshot/reset features are disabled.  `foreign_keys` is
     ///   still applied.
     pub fn open(config: &Config) -> Result<Self> {
-        let path = &config.database_path;
-        let is_memory = path == ":memory:";
+        let raw = &config.database_path;
+        let is_memory = raw == ":memory:";
+
+        // Resolve relative paths against project_root so the correct database
+        // is opened when the CLI is invoked from a subdirectory of the project.
+        // Absolute paths and the special ":memory:" token are used as-is.
+        let resolved_path;
+        let path: &str = if is_memory || Path::new(raw).is_absolute() {
+            raw
+        } else {
+            resolved_path = config.project_root.join(raw);
+            resolved_path.to_str().with_context(|| {
+                format!("database path contains invalid UTF-8: {:?}", resolved_path)
+            })?
+        };
 
         let conn = if is_memory {
             warn!("database_path is \":memory:\": snapshots and resets are disabled");
@@ -365,5 +380,33 @@ mod tests {
         let mut cfg = file_config(tmp.path().to_str().unwrap());
         cfg.pragmas.foreign_keys = "ON; DROP TABLE x".to_string();
         assert!(Db::open(&cfg).is_err());
+    }
+
+    // -- path resolution -----------------------------------------------------
+
+    #[test]
+    fn open_resolves_relative_path_against_project_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config {
+            project_root: dir.path().to_path_buf(),
+            database_path: "relative.db".to_string(),
+            ..Config::default()
+        };
+        let db = Db::open(&cfg).expect("should open relative path against project_root");
+        // Verify the file was created inside project_root, not CWD.
+        assert!(dir.path().join("relative.db").exists());
+        drop(db);
+    }
+
+    #[test]
+    fn open_uses_absolute_path_as_is() {
+        let tmp = NamedTempFile::new().unwrap();
+        let cfg = Config {
+            // project_root is irrelevant when path is absolute
+            project_root: std::path::PathBuf::from("/nonexistent"),
+            database_path: tmp.path().to_str().unwrap().to_string(),
+            ..Config::default()
+        };
+        assert!(Db::open(&cfg).is_ok());
     }
 }
