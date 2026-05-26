@@ -93,7 +93,10 @@ impl Db {
     /// [`rusqlite::Connection::close`] returns `Err((conn, e))` on failure;
     /// we discard the re-returned connection and surface just the error.
     pub fn close(self) -> Result<()> {
-        self.conn.close().map_err(|(_, e)| e).context("failed to close SQLite connection")
+        self.conn
+            .close()
+            .map_err(|(_, e)| e)
+            .context("failed to close SQLite connection")
     }
 
     // -----------------------------------------------------------------------
@@ -143,11 +146,17 @@ mod tests {
     use crate::config::Config;
 
     fn file_config(path: &str) -> Config {
-        Config { database_path: path.to_string(), ..Config::default() }
+        Config {
+            database_path: path.to_string(),
+            ..Config::default()
+        }
     }
 
     fn memory_config() -> Config {
-        Config { database_path: ":memory:".to_string(), ..Config::default() }
+        Config {
+            database_path: ":memory:".to_string(),
+            ..Config::default()
+        }
     }
 
     // -- file DB -------------------------------------------------------------
@@ -171,8 +180,10 @@ mod tests {
         let cfg = file_config(tmp.path().to_str().unwrap());
         let db = Db::open(&cfg).expect("open failed");
 
-        let fk: i32 =
-            db.conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
+        let fk: i32 = db
+            .conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(fk, 1);
     }
 
@@ -200,15 +211,21 @@ mod tests {
             .conn
             .query_row("PRAGMA journal_mode", [], |r| r.get(0))
             .unwrap();
-        assert_ne!(mode.to_uppercase(), "WAL", "WAL should not be set for :memory:");
+        assert_ne!(
+            mode.to_uppercase(),
+            "WAL",
+            "WAL should not be set for :memory:"
+        );
     }
 
     #[test]
     fn open_memory_applies_foreign_keys() {
         let db = Db::open(&memory_config()).expect("open failed");
 
-        let fk: i32 =
-            db.conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0)).unwrap();
+        let fk: i32 = db
+            .conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(fk, 1);
     }
 
@@ -234,7 +251,8 @@ mod tests {
     #[test]
     fn checkpoint_is_noop_on_memory_db() {
         let db = Db::open(&memory_config()).unwrap();
-        db.checkpoint().expect("checkpoint should succeed for :memory:");
+        db.checkpoint()
+            .expect("checkpoint should succeed for :memory:");
     }
 
     #[test]
@@ -248,7 +266,10 @@ mod tests {
     fn connection_accessor_returns_conn() {
         let db = Db::open(&memory_config()).unwrap();
         // sanity: can execute a query through the accessor
-        let n: i32 = db.connection().query_row("SELECT 1", [], |r| r.get(0)).unwrap();
+        let n: i32 = db
+            .connection()
+            .query_row("SELECT 1", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(n, 1);
     }
 }
