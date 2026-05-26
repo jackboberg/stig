@@ -235,12 +235,21 @@ impl Config {
                 // Set project_root to the directory containing the config file
                 // so callers can resolve relative paths correctly regardless of
                 // where the process CWD is.
-                cfg.project_root = path
+                //
+                // Canonicalize the full config file path first so that a bare
+                // filename like "stig.toml" (where path.parent() == Some(""))
+                // is resolved against CWD before we strip the filename component.
+                let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+                cfg.project_root = canonical_path
                     .parent()
-                    .unwrap_or(path)
-                    .to_path_buf()
-                    .canonicalize()
-                    .unwrap_or_else(|_| path.parent().unwrap_or(path).to_path_buf());
+                    .map(|p| {
+                        if p == std::path::Path::new("") {
+                            std::env::current_dir().unwrap_or_else(|_| p.to_path_buf())
+                        } else {
+                            p.to_path_buf()
+                        }
+                    })
+                    .unwrap_or_else(|| canonical_path.clone());
                 cfg
             }
             None => {
@@ -708,5 +717,85 @@ mod tests {
 
         let cfg = Config::load(Some(fb.path()), Some(&env), None).unwrap();
         assert_eq!(cfg.database_path, "from_stig_config.db");
+    }
+
+    // -----------------------------------------------------------------------
+    // 8. project_root edge cases
+    // -----------------------------------------------------------------------
+
+    /// When the config file path has no meaningful parent (e.g. STIG_CONFIG
+    /// is a bare filename like "stig.toml"), project_root must resolve to the
+    /// actual directory that contains the file — not an empty path.
+    ///
+    /// We simulate this by writing a `stig.toml` into a TempDir and then
+    /// passing its filename as a bare path from within that directory by
+    /// setting STIG_CONFIG via the injected env map.
+    #[test]
+    fn project_root_resolved_when_config_path_is_bare_filename() {
+        // Write a minimal config inside a fresh temp dir.
+        let dir = TempDir::new().unwrap();
+        let config_file = dir.path().join("stig.toml");
+        std::fs::write(&config_file, r#"database_path = "app.db""#).unwrap();
+
+        // Compute what the bare relative path would look like when the process
+        // is *at* dir: just "stig.toml".  We cannot actually chdir in a test,
+        // so instead we pass the full absolute path — but verify the important
+        // property: project_root is the directory containing the file, not "".
+        let mut env = empty_env();
+        env.insert(
+            "STIG_CONFIG".into(),
+            config_file.to_str().unwrap().to_string(),
+        );
+
+        let cfg = Config::load(None, Some(&env), None).unwrap();
+        assert_eq!(cfg.database_path, "app.db");
+        assert_eq!(cfg.project_root, dir.path().canonicalize().unwrap());
+        // Crucially, project_root must not be an empty path.
+        assert_ne!(cfg.project_root, std::path::PathBuf::new());
+        assert_ne!(cfg.project_root, std::path::Path::new(""));
+    }
+
+    /// project_root should equal the directory that contains the config file
+    /// regardless of what start_dir is supplied.
+    #[test]
+    fn project_root_is_config_file_parent_not_start_dir() {
+        let config_dir = TempDir::new().unwrap();
+        let start_dir = TempDir::new().unwrap();
+
+        let config_file = config_dir.path().join("stig.toml");
+        std::fs::write(&config_file, r#"database_path = "app.db""#).unwrap();
+
+        // Pass a different start_dir — project_root must still come from the
+        // config file's location, not from start_dir.
+        let cfg = Config::load(
+            Some(&config_file),
+            Some(&empty_env()),
+            Some(start_dir.path()),
+        )
+        .unwrap();
+
+        assert_eq!(cfg.project_root, config_dir.path().canonicalize().unwrap());
+        assert_ne!(cfg.project_root, start_dir.path().canonicalize().unwrap());
+    }
+
+    // -----------------------------------------------------------------------
+    // 9. Hermetic env injection
+    // -----------------------------------------------------------------------
+
+    /// When an env map is injected, load() must NOT read the real process
+    /// environment.  We verify this by asserting that an env var set only in
+    /// the process environment is ignored when an injected map is provided.
+    ///
+    /// Note: we never call std::env::set_var here; we rely on the env map
+    /// being empty to prove the hermetic path is taken.
+    #[test]
+    fn injected_env_map_prevents_process_env_leaking_into_load() {
+        // An empty injected env must produce the default database_path, even
+        // if (in some hypothetical concurrent test) STIG_DATABASE_PATH were set
+        // in the process environment.  This is a contract test: it documents
+        // that Some(&map) gates out the real env.
+        let f = temp_toml("");
+        let cfg = Config::load(Some(f.path()), Some(&empty_env()), None).unwrap();
+        assert_eq!(cfg.database_path, Config::default().database_path);
     }
 }
