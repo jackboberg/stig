@@ -203,12 +203,16 @@ impl Config {
     ///   environment; pass `Some(&map)` in tests for full isolation.
     /// - `start_dir`: starting directory for the upward config-file search.
     ///   Pass `None` to use the real CWD; pass `Some(path)` in tests to avoid
-    ///   touching process state.
+    ///   touching process state. Note: `start_dir` only controls where the
+    ///   upward search begins — if `override_path` or `STIG_CONFIG` is a
+    ///   relative path, it is still resolved against the process CWD via
+    ///   [`std::fs::canonicalize`], not against `start_dir`.
     ///
     /// # Errors
     ///
     /// Returns [`CliError::Usage`] (exit 2) if the config file is found but
-    /// contains invalid TOML or fails to deserialise into [`Config`].
+    /// contains invalid TOML or fails to deserialise into [`Config`] (reported
+    /// as "invalid config").
     ///
     /// A missing config file is **not** an error — defaults are used.
     pub fn load(
@@ -232,7 +236,7 @@ impl Config {
                     CliError::Usage(format!("cannot read config file {}: {}", path.display(), e))
                 })?;
                 let mut cfg: Config = toml::from_str(&raw).map_err(|e| {
-                    CliError::Usage(format!("invalid TOML in {}: {}", path.display(), e))
+                    CliError::Usage(format!("invalid config in {}: {}", path.display(), e))
                 })?;
                 // Set project_root to the directory containing the config file
                 // so callers can resolve relative paths correctly regardless of
@@ -398,9 +402,35 @@ impl Config {
 mod tests {
     use super::*;
     use indoc::indoc;
-    use serial_test::serial;
     use std::io::Write;
     use tempfile::{NamedTempFile, TempDir};
+
+    /// RAII guard that sets an environment variable on construction and removes
+    /// it on drop — including on panic/unwind.  This avoids leaving sentinel
+    /// values in the process environment if a test fails mid-way.
+    ///
+    /// # Safety
+    /// `set_var` / `remove_var` are inherently unsafe in a multi-threaded
+    /// process.  Mark the test `#[serial]` (via `serial_test`) to serialise it
+    /// against other tests that read or write the same key.
+    struct EnvGuard {
+        key: &'static str,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            // SAFETY: caller must ensure single-threaded access (e.g. #[serial]).
+            unsafe { std::env::set_var(key, value) };
+            EnvGuard { key }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: same requirement as set().
+            unsafe { std::env::remove_var(self.key) };
+        }
+    }
 
     fn empty_env() -> HashMap<String, String> {
         HashMap::new()
@@ -787,24 +817,24 @@ mod tests {
     /// environment — even if a relevant env var is set in the process env.
     ///
     /// This test sets `STIG_DATABASE_PATH` in the real process environment for
-    /// the duration of the test, then calls `load()` with an injected empty
-    /// map.  The resulting `database_path` must be the default, proving that
+    /// the duration of the test via an [`EnvGuard`] (which removes the var on
+    /// drop, even on panic), then calls `load()` with an injected empty map.
+    /// The resulting `database_path` must be the default, proving that
     /// `load()` consulted the injected map rather than `std::env::var`.
     ///
     /// Marked `#[serial]` because it mutates the process environment, which is
     /// global state that could interfere with other tests running concurrently.
     #[test]
-    #[serial]
+    #[serial_test::serial]
     fn injected_env_map_prevents_process_env_leaking_into_load() {
         const KEY: &str = "STIG_DATABASE_PATH";
         const SENTINEL: &str = "__stig_test_sentinel__.db";
 
-        // Safety: single-threaded thanks to #[serial].
-        unsafe { std::env::set_var(KEY, SENTINEL) };
+        // Guard removes KEY from the env on drop — including on panic.
+        let _guard = EnvGuard::set(KEY, SENTINEL);
+
         let f = temp_toml("");
         let cfg = Config::load(Some(f.path()), Some(&empty_env()), None).unwrap();
-        // Restore regardless of assertion outcome.
-        unsafe { std::env::remove_var(KEY) };
 
         // The process env had STIG_DATABASE_PATH=SENTINEL, but the injected
         // empty map should have been used instead.
