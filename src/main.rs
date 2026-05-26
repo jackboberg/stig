@@ -1,3 +1,50 @@
+use clap::{Parser, Subcommand};
+use stig::errors::CliError;
+
+#[derive(Debug, Parser)]
+#[command(name = "stig", about = "A SQLite migration and schema CLI", version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Initialize a new stig project in the current directory.
+    Init,
+    /// Create a new migration file.
+    New,
+    /// Apply pending migrations.
+    Migrate,
+    /// Show migration status.
+    Status,
+    /// Roll back the last migration and re-apply it.
+    Redo,
+    /// Reset the database to a snapshot.
+    Reset,
+    /// Generate code from the current schema.
+    Generate,
+    /// Manage database backups/snapshots.
+    Backups,
+}
+
 fn main() {
-    println!("Hello, world!");
+    let cli = Cli::parse();
+
+    let result: Result<(), anyhow::Error> = match cli.command {
+        Command::Init => stig::cli::init::run(),
+        Command::New => stig::cli::new::run(),
+        Command::Migrate => stig::cli::migrate::run(),
+        Command::Status => stig::cli::status::run(),
+        Command::Redo => stig::cli::redo::run(),
+        Command::Reset => stig::cli::reset::run(),
+        Command::Generate => stig::cli::generate::run(),
+        Command::Backups => stig::cli::backups::run(),
+    };
+
+    if let Err(e) = result {
+        let cli_err = CliError::Generic(e);
+        eprintln!("{cli_err}");
+        std::process::exit(cli_err.exit_code());
+    }
 }
