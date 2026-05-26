@@ -204,9 +204,11 @@ impl Config {
         env: Option<&HashMap<String, String>>,
         start_dir: Option<&Path>,
     ) -> Result<Self, CliError> {
-        // Load .env before anything else so it can be observed by callers.
-        // Errors (e.g. missing .env) are intentionally ignored.
-        dotenvy::dotenv().ok();
+        // Load .env when using the real process environment. Skip when an
+        // injected env map is provided so tests remain fully hermetic.
+        if env.is_none() {
+            dotenvy::dotenv().ok();
+        }
 
         // Resolve the config file path.
         let config_path = Self::resolve_config_path(override_path, env, start_dir);
@@ -265,16 +267,11 @@ impl Config {
         env: Option<&HashMap<String, String>>,
         start_dir: Option<&Path>,
     ) -> Option<PathBuf> {
-        // 1. STIG_CONFIG env var.
+        // 1. STIG_CONFIG env var — always passed through so the caller gets a
+        // clear IO error if the file doesn't exist rather than silently falling
+        // back to defaults.
         if let Some(p) = Self::env_get(env, "STIG_CONFIG") {
-            let path = PathBuf::from(p);
-            if path.exists() {
-                return Some(path);
-            }
-            // If STIG_CONFIG is set but the file doesn't exist we still return
-            // it so the caller gets a clear IO error rather than silently
-            // falling back to defaults.
-            return Some(path);
+            return Some(PathBuf::from(p));
         }
 
         // 2. Explicit override path.
@@ -390,12 +387,11 @@ mod tests {
     #[test]
     fn explicit_config_path_not_found_returns_error() {
         // An explicit path that does not exist should produce a CliError::Usage,
-        // not silently fall back to defaults.
-        let result = Config::load(
-            Some(Path::new("/tmp/no_such_stig.toml")),
-            Some(&empty_env()),
-            None,
-        );
+        // not silently fall back to defaults. Use a TempDir to guarantee the
+        // path is absent without relying on a hard-coded system path.
+        let dir = TempDir::new().unwrap();
+        let absent = dir.path().join("no_such_stig.toml");
+        let result = Config::load(Some(&absent), Some(&empty_env()), None);
         assert!(matches!(result, Err(CliError::Usage(_))));
     }
 
