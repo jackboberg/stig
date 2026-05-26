@@ -96,9 +96,11 @@ pub struct CliOverrides {
 /// Resolved configuration for a `stig` invocation.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Config {
-    /// The project root directory: the parent of the `stig.toml` file, or the
-    /// process CWD if no config file was found. All relative paths in the
-    /// config (`database_path`, `migrations_dir`, `backups_dir`,
+    /// The project root directory: the parent of the `stig.toml` file when
+    /// one is found, or `start_dir` when supplied to [`Config::load`], or the
+    /// process CWD as a last resort when no config file is found and no
+    /// `start_dir` is provided. All relative paths in the config
+    /// (`database_path`, `migrations_dir`, `backups_dir`,
     /// `[[generate]].path`) should be resolved against this directory.
     ///
     /// Not serialized — populated by [`Config::load`].
@@ -396,6 +398,7 @@ impl Config {
 mod tests {
     use super::*;
     use indoc::indoc;
+    use serial_test::serial;
     use std::io::Write;
     use tempfile::{NamedTempFile, TempDir};
 
@@ -723,24 +726,23 @@ mod tests {
     // 8. project_root edge cases
     // -----------------------------------------------------------------------
 
-    /// When the config file path has no meaningful parent (e.g. STIG_CONFIG
-    /// is a bare filename like "stig.toml"), project_root must resolve to the
-    /// actual directory that contains the file — not an empty path.
+    /// Verifies that `project_root` is set to the directory containing the
+    /// config file when the path is supplied as an absolute path via
+    /// `STIG_CONFIG`.  This exercises the `canonicalize`-before-`parent`
+    /// logic added to avoid an empty `project_root` for paths with no
+    /// meaningful parent component (e.g. a bare filename resolved by the OS).
     ///
-    /// We simulate this by writing a `stig.toml` into a TempDir and then
-    /// passing its filename as a bare path from within that directory by
-    /// setting STIG_CONFIG via the injected env map.
+    /// Note: truly testing a bare filename (e.g. `STIG_CONFIG=stig.toml`)
+    /// requires a `set_current_dir` + mutex guard to avoid cross-test
+    /// interference; that is tracked as a follow-up.  This test confirms the
+    /// core correctness property: `project_root` equals the file's parent.
     #[test]
-    fn project_root_resolved_when_config_path_is_bare_filename() {
+    fn project_root_equals_config_file_parent_when_set_via_stig_config_env() {
         // Write a minimal config inside a fresh temp dir.
         let dir = TempDir::new().unwrap();
         let config_file = dir.path().join("stig.toml");
         std::fs::write(&config_file, r#"database_path = "app.db""#).unwrap();
 
-        // Compute what the bare relative path would look like when the process
-        // is *at* dir: just "stig.toml".  We cannot actually chdir in a test,
-        // so instead we pass the full absolute path — but verify the important
-        // property: project_root is the directory containing the file, not "".
         let mut env = empty_env();
         env.insert(
             "STIG_CONFIG".into(),
@@ -750,7 +752,6 @@ mod tests {
         let cfg = Config::load(None, Some(&env), None).unwrap();
         assert_eq!(cfg.database_path, "app.db");
         assert_eq!(cfg.project_root, dir.path().canonicalize().unwrap());
-        // Crucially, project_root must not be an empty path.
         assert_ne!(cfg.project_root, std::path::PathBuf::new());
         assert_ne!(cfg.project_root, std::path::Path::new(""));
     }
@@ -782,20 +783,35 @@ mod tests {
     // 9. Hermetic env injection
     // -----------------------------------------------------------------------
 
-    /// When an env map is injected, load() must NOT read the real process
-    /// environment.  We verify this by asserting that an env var set only in
-    /// the process environment is ignored when an injected map is provided.
+    /// When an env map is injected, `load()` must NOT read the real process
+    /// environment — even if a relevant env var is set in the process env.
     ///
-    /// Note: we never call std::env::set_var here; we rely on the env map
-    /// being empty to prove the hermetic path is taken.
+    /// This test sets `STIG_DATABASE_PATH` in the real process environment for
+    /// the duration of the test, then calls `load()` with an injected empty
+    /// map.  The resulting `database_path` must be the default, proving that
+    /// `load()` consulted the injected map rather than `std::env::var`.
+    ///
+    /// Marked `#[serial]` because it mutates the process environment, which is
+    /// global state that could interfere with other tests running concurrently.
     #[test]
+    #[serial]
     fn injected_env_map_prevents_process_env_leaking_into_load() {
-        // An empty injected env must produce the default database_path, even
-        // if (in some hypothetical concurrent test) STIG_DATABASE_PATH were set
-        // in the process environment.  This is a contract test: it documents
-        // that Some(&map) gates out the real env.
+        const KEY: &str = "STIG_DATABASE_PATH";
+        const SENTINEL: &str = "__stig_test_sentinel__.db";
+
+        // Safety: single-threaded thanks to #[serial].
+        unsafe { std::env::set_var(KEY, SENTINEL) };
         let f = temp_toml("");
         let cfg = Config::load(Some(f.path()), Some(&empty_env()), None).unwrap();
+        // Restore regardless of assertion outcome.
+        unsafe { std::env::remove_var(KEY) };
+
+        // The process env had STIG_DATABASE_PATH=SENTINEL, but the injected
+        // empty map should have been used instead.
+        assert_ne!(
+            cfg.database_path, SENTINEL,
+            "load() must not read the real process env when an injected map is provided"
+        );
         assert_eq!(cfg.database_path, Config::default().database_path);
     }
 }
