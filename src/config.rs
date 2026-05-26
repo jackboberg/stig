@@ -218,11 +218,7 @@ impl Config {
                     CliError::Usage(format!("cannot read config file {}: {}", path.display(), e))
                 })?;
                 toml::from_str(&raw).map_err(|e| {
-                    CliError::Usage(format!(
-                        "invalid TOML in {}: {}",
-                        path.display(),
-                        e
-                    ))
+                    CliError::Usage(format!("invalid TOML in {}: {}", path.display(), e))
                 })?
             }
             None => Config::default(),
@@ -324,8 +320,8 @@ impl Config {
     /// Apply all environment-variable overrides to `self`.
     fn apply_env_overrides(&mut self, env: Option<&HashMap<String, String>>) {
         // STIG_DATABASE_PATH or DATABASE_PATH
-        if let Some(v) = Self::env_get(env, "STIG_DATABASE_PATH")
-            .or_else(|| Self::env_get(env, "DATABASE_PATH"))
+        if let Some(v) =
+            Self::env_get(env, "STIG_DATABASE_PATH").or_else(|| Self::env_get(env, "DATABASE_PATH"))
         {
             self.database_path = v;
         }
@@ -658,7 +654,10 @@ mod tests {
         let fb = temp_toml(r#"database_path = "from_override.db""#);
 
         let mut env = empty_env();
-        env.insert("STIG_CONFIG".into(), fa.path().to_str().unwrap().to_string());
+        env.insert(
+            "STIG_CONFIG".into(),
+            fa.path().to_str().unwrap().to_string(),
+        );
 
         let cfg = Config::load(Some(fb.path()), Some(&env), None).unwrap();
         assert_eq!(cfg.database_path, "from_stig_config.db");
