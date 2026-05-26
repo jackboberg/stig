@@ -106,31 +106,65 @@ impl Db {
     fn apply_pragmas(&self, pragmas: &crate::config::Pragmas) -> Result<()> {
         // journal_mode is skipped for :memory: (WAL is incompatible)
         if !self.is_memory {
-            let requested = pragmas.journal_mode.to_uppercase();
+            let requested = validate_journal_mode(&pragmas.journal_mode)?;
             let actual: String = self
                 .conn
-                .query_row(
-                    &format!("PRAGMA journal_mode = {}", pragmas.journal_mode),
-                    [],
-                    |row| row.get(0),
-                )
+                .query_row(&format!("PRAGMA journal_mode = {requested}"), [], |row| {
+                    row.get(0)
+                })
                 .context("failed to set PRAGMA journal_mode")?;
             if actual.to_uppercase() != requested {
                 warn!(
                     requested = %requested,
                     actual = %actual,
                     "PRAGMA journal_mode did not settle to the requested value; \
-                     WAL may be unsupported on this filesystem"
+                     the mode may be unsupported in this environment"
                 );
             }
         }
 
         // foreign_keys applies to all connection types
+        let fk = validate_foreign_keys(&pragmas.foreign_keys)?;
         self.conn
-            .execute_batch(&format!("PRAGMA foreign_keys = {};", pragmas.foreign_keys))
+            .execute_batch(&format!("PRAGMA foreign_keys = {fk};"))
             .context("failed to set PRAGMA foreign_keys")?;
 
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Validation helpers
+// ---------------------------------------------------------------------------
+
+/// Validate and normalise a `journal_mode` value.
+///
+/// Accepts any casing of the six modes SQLite recognises: DELETE, TRUNCATE,
+/// PERSIST, MEMORY, WAL, OFF.  Returns the upper-cased token so it can be
+/// safely interpolated into a PRAGMA statement without risk of injection.
+fn validate_journal_mode(value: &str) -> Result<String> {
+    const ALLOWED: &[&str] = &["DELETE", "TRUNCATE", "PERSIST", "MEMORY", "WAL", "OFF"];
+    let upper = value.trim().to_uppercase();
+    if ALLOWED.contains(&upper.as_str()) {
+        Ok(upper)
+    } else {
+        anyhow::bail!(
+            "invalid journal_mode {:?}; must be one of: {}",
+            value,
+            ALLOWED.join(", ")
+        )
+    }
+}
+
+/// Validate and normalise a `foreign_keys` value.
+///
+/// Accepts ON/OFF (any case) and the numeric equivalents 1/0.  Returns the
+/// upper-cased token so it can be safely interpolated into a PRAGMA statement.
+fn validate_foreign_keys(value: &str) -> Result<String> {
+    match value.trim().to_uppercase().as_str() {
+        "ON" | "1" => Ok("ON".to_string()),
+        "OFF" | "0" => Ok("OFF".to_string()),
+        _ => anyhow::bail!("invalid foreign_keys {:?}; must be ON, OFF, 1, or 0", value),
     }
 }
 
@@ -271,5 +305,65 @@ mod tests {
             .query_row("SELECT 1", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 1);
+    }
+
+    // -- validation helpers --------------------------------------------------
+
+    #[test]
+    fn validate_journal_mode_accepts_all_valid_modes() {
+        for mode in &[
+            "WAL", "wal", "DELETE", "TRUNCATE", "PERSIST", "MEMORY", "OFF",
+        ] {
+            assert!(
+                validate_journal_mode(mode).is_ok(),
+                "expected {mode:?} to be valid"
+            );
+        }
+    }
+
+    #[test]
+    fn validate_journal_mode_normalises_to_uppercase() {
+        assert_eq!(validate_journal_mode("wal").unwrap(), "WAL");
+        assert_eq!(validate_journal_mode("delete").unwrap(), "DELETE");
+    }
+
+    #[test]
+    fn validate_journal_mode_rejects_invalid() {
+        assert!(validate_journal_mode("WAL; DROP TABLE foo").is_err());
+        assert!(validate_journal_mode("").is_err());
+        assert!(validate_journal_mode("UNKNOWN").is_err());
+    }
+
+    #[test]
+    fn validate_foreign_keys_accepts_valid_values() {
+        assert_eq!(validate_foreign_keys("ON").unwrap(), "ON");
+        assert_eq!(validate_foreign_keys("on").unwrap(), "ON");
+        assert_eq!(validate_foreign_keys("1").unwrap(), "ON");
+        assert_eq!(validate_foreign_keys("OFF").unwrap(), "OFF");
+        assert_eq!(validate_foreign_keys("off").unwrap(), "OFF");
+        assert_eq!(validate_foreign_keys("0").unwrap(), "OFF");
+    }
+
+    #[test]
+    fn validate_foreign_keys_rejects_invalid() {
+        assert!(validate_foreign_keys("ON; DROP TABLE foo").is_err());
+        assert!(validate_foreign_keys("").is_err());
+        assert!(validate_foreign_keys("TRUE").is_err());
+    }
+
+    #[test]
+    fn open_rejects_invalid_journal_mode() {
+        let tmp = NamedTempFile::new().unwrap();
+        let mut cfg = file_config(tmp.path().to_str().unwrap());
+        cfg.pragmas.journal_mode = "INVALID; --".to_string();
+        assert!(Db::open(&cfg).is_err());
+    }
+
+    #[test]
+    fn open_rejects_invalid_foreign_keys() {
+        let tmp = NamedTempFile::new().unwrap();
+        let mut cfg = file_config(tmp.path().to_str().unwrap());
+        cfg.pragmas.foreign_keys = "ON; DROP TABLE x".to_string();
+        assert!(Db::open(&cfg).is_err());
     }
 }
