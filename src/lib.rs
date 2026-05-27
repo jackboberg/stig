@@ -2,6 +2,7 @@ pub mod checksum;
 pub mod cli;
 pub mod codegen;
 pub mod config;
+pub mod context;
 pub mod db;
 pub mod errors;
 pub mod migrate;

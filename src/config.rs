@@ -190,69 +190,6 @@ impl Default for Config {
 // ---------------------------------------------------------------------------
 
 impl Config {
-    /// Load configuration from a pre-resolved path (or defaults when `None`),
-    /// then apply real process environment overrides.
-    ///
-    /// Unlike [`Config::load`], this method does **not** run the
-    /// `STIG_CONFIG` / `override_path` / upward-search resolution — the caller
-    /// is responsible for resolving the path first (e.g. via
-    /// [`Config::resolve_path`]). This avoids double-resolution in commands
-    /// like `init` that need to know the target path before loading.
-    ///
-    /// - `resolved_path`: the config file to read, or `None` to use defaults.
-    ///   If the path exists it is read; if it does not exist (e.g. on first
-    ///   `init`) defaults are used with `start_dir` as the project root.
-    /// - `start_dir`: fallback project root when `resolved_path` is absent.
-    pub fn load_from(
-        resolved_path: Option<&Path>,
-        start_dir: Option<&Path>,
-    ) -> Result<Self, CliError> {
-        dotenvy::dotenv().ok();
-
-        let mut config: Config = match resolved_path.filter(|p| p.exists()) {
-            Some(path) => {
-                let raw = std::fs::read_to_string(path).map_err(|e| {
-                    CliError::Usage(format!("cannot read config file {}: {}", path.display(), e))
-                })?;
-                let mut cfg: Config = toml::from_str(&raw).map_err(|e| {
-                    CliError::Usage(format!("invalid config in {}: {}", path.display(), e))
-                })?;
-                let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-                cfg.project_root = canonical_path
-                    .parent()
-                    .map(|p| {
-                        if p == std::path::Path::new("") {
-                            std::env::current_dir().unwrap_or_else(|_| p.to_path_buf())
-                        } else {
-                            p.to_path_buf()
-                        }
-                    })
-                    .unwrap_or_else(|| canonical_path.clone());
-                cfg
-            }
-            None => {
-                let project_root = start_dir
-                    .map(|d| d.to_path_buf())
-                    .or_else(|| {
-                        // If the caller provided a (non-existent) resolved path,
-                        // use its parent as the project root.
-                        resolved_path
-                            .and_then(|p| p.parent())
-                            .map(|p| p.to_path_buf())
-                    })
-                    .or_else(|| std::env::current_dir().ok())
-                    .unwrap_or_default();
-                Config {
-                    project_root,
-                    ..Config::default()
-                }
-            }
-        };
-
-        config.apply_env_overrides(None);
-        Ok(config)
-    }
-
     /// Load configuration, applying the following precedence:
     ///
     /// 1. Environment variables (from `env`)
@@ -291,7 +228,7 @@ impl Config {
         }
 
         // Resolve the config file path.
-        let config_path = Self::resolve_config_path(override_path, env, start_dir);
+        let config_path = Self::resolve_path(override_path, env, start_dir);
 
         // Parse the file, or start from defaults if there is no file.
         let mut config: Config = match config_path {
@@ -385,25 +322,7 @@ impl Config {
     /// 3. Upward search from `start_dir` (or CWD) for `stig.toml`
     ///
     /// Returns `None` if no config file is found (not an error).
-    ///
-    /// This is public so callers (e.g. `stig init`) can determine the
-    /// canonical config path for write-target purposes without duplicating
-    /// the precedence logic.
-    pub fn resolve_path(
-        override_path: Option<&Path>,
-        env: Option<&HashMap<String, String>>,
-        start_dir: Option<&Path>,
-    ) -> Option<PathBuf> {
-        Self::resolve_config_path(override_path, env, start_dir)
-    }
-
-    /// Resolve the path to the config file using the precedence:
-    /// 1. `STIG_CONFIG` env var
-    /// 2. `override_path` argument
-    /// 3. Upward search from `start_dir` (or CWD) for `stig.toml`
-    ///
-    /// Returns `None` if no config file is found (not an error).
-    fn resolve_config_path(
+    pub(crate) fn resolve_path(
         override_path: Option<&Path>,
         env: Option<&HashMap<String, String>>,
         start_dir: Option<&Path>,
@@ -994,53 +913,5 @@ mod tests {
         assert_eq!(loaded.snapshot_keep, 10);
         assert!(!loaded.auto_snapshot);
         assert_eq!(loaded.pragmas.journal_mode, "DELETE");
-    }
-
-    // -----------------------------------------------------------------------
-    // 11. Config::load_from
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn load_from_uses_defaults_when_path_is_none() {
-        let dir = TempDir::new().unwrap();
-        let config = Config::load_from(None, Some(dir.path())).unwrap();
-        assert_eq!(config.database_path, Config::default().database_path);
-        assert_eq!(config.project_root, dir.path());
-    }
-
-    #[test]
-    fn load_from_reads_existing_file() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("stig.toml");
-        let original = Config {
-            project_root: dir.path().to_path_buf(),
-            database_path: "mydb.db".to_string(),
-            ..Config::default()
-        };
-        original.write(&path).unwrap();
-
-        let loaded = Config::load_from(Some(&path), None).unwrap();
-        assert_eq!(loaded.database_path, "mydb.db");
-        assert_eq!(loaded.project_root, dir.path().canonicalize().unwrap());
-    }
-
-    #[test]
-    fn load_from_uses_defaults_for_nonexistent_path() {
-        let dir = TempDir::new().unwrap();
-        let absent = dir.path().join("does_not_exist.toml");
-        // Non-existent path: should not error, should use defaults with
-        // project_root derived from the absent path's parent.
-        let config = Config::load_from(Some(&absent), None).unwrap();
-        assert_eq!(config.database_path, Config::default().database_path);
-        assert_eq!(config.project_root, dir.path());
-    }
-
-    #[test]
-    fn load_from_returns_error_for_invalid_toml() {
-        let dir = TempDir::new().unwrap();
-        let path = dir.path().join("bad.toml");
-        std::fs::write(&path, "not valid toml ][[[").unwrap();
-        let result = Config::load_from(Some(&path), None);
-        assert!(result.is_err(), "invalid TOML should return an error");
     }
 }

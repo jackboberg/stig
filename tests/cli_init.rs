@@ -229,31 +229,29 @@ fn init_force_creates_artifacts_matching_written_config() {
 }
 
 // ---------------------------------------------------------------------------
-// 7. --force succeeds even when the existing stig.toml is invalid TOML
+// 7. Invalid stig.toml always errors before any command runs
 // ---------------------------------------------------------------------------
 
 #[test]
-fn init_force_recovers_from_invalid_toml() {
+fn init_invalid_toml_always_errors() {
     let dir = TempDir::new().unwrap();
 
     // Write a deliberately broken stig.toml.
     let toml_path = dir.path().join("stig.toml");
     std::fs::write(&toml_path, "this is not valid toml ][[[").unwrap();
 
-    // Without --force this should still exit 2 (file exists).
+    // Without --force: exits 2 with a TOML parse error message.
     stig_init(&dir, &[])
         .failure()
         .code(2)
-        .stderr(predicate::str::contains("already exists"));
+        .stderr(predicate::str::contains("invalid config"));
 
-    // With --force it should succeed and overwrite with defaults.
-    stig_init(&dir, &["--force"]).success();
-
-    let toml_after = std::fs::read_to_string(&toml_path).unwrap();
-    assert!(
-        toml_after.contains("app.db"),
-        "stig.toml should contain default database_path after --force recovery"
-    );
+    // With --force: still exits 2 — invalid TOML is always an error.
+    // Users must fix or delete stig.toml manually before init --force can run.
+    stig_init(&dir, &["--force"])
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("invalid config"));
 }
 
 // ---------------------------------------------------------------------------
