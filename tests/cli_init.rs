@@ -123,7 +123,7 @@ fn init_force_overwrites_config() {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Env-var overrides must not be persisted to stig.toml
+// 4. Env-var overrides: not persisted to stig.toml, but applied for artifacts
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -149,6 +149,18 @@ fn init_does_not_persist_env_var_overrides_to_toml() {
         toml.contains("app.db"),
         "stig.toml should contain the default database_path"
     );
+
+    // The env-var override IS applied for artifact creation: schema_migrations
+    // is created in from_env.db (the runtime DB), not app.db.
+    assert!(
+        dir.path().join("from_env.db").is_file(),
+        "from_env.db should be created (env override applied to artifact creation)"
+    );
+    let conn = Connection::open(dir.path().join("from_env.db")).unwrap();
+    conn.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+        row.get::<_, i64>(0)
+    })
+    .expect("schema_migrations should exist in from_env.db");
 }
 
 // ---------------------------------------------------------------------------
@@ -214,4 +226,33 @@ fn init_force_creates_artifacts_matching_written_config() {
         row.get::<_, i64>(0)
     })
     .expect("schema_migrations should exist in app.db after --force");
+}
+
+// ---------------------------------------------------------------------------
+// 7. STIG_CONFIG env var controls the write target
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_stig_config_env_var_controls_write_target() {
+    let dir = TempDir::new().unwrap();
+    let custom_toml = dir.path().join("custom.toml");
+
+    // Run init with STIG_CONFIG pointing to a non-existent file.
+    let mut cmd = Command::cargo_bin("stig").unwrap();
+    cmd.current_dir(dir.path())
+        .arg("init")
+        .env("STIG_CONFIG", custom_toml.to_str().unwrap());
+    cmd.assert().success();
+
+    // The config must be written to the STIG_CONFIG path.
+    assert!(
+        custom_toml.is_file(),
+        "custom.toml should be written via STIG_CONFIG"
+    );
+
+    // The default stig.toml must NOT be created.
+    assert!(
+        !dir.path().join("stig.toml").exists(),
+        "stig.toml should not be created when STIG_CONFIG is set"
+    );
 }

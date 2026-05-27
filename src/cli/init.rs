@@ -18,43 +18,34 @@ use crate::errors::CliError;
 /// Run `stig init`.
 ///
 /// - `config_path`: optional explicit path to `stig.toml` supplied via
-///   `--config`.  When `Some`, this is used as both the guard/read source and
-///   the write target. When `None`, the default upward-search logic in
-///   [`Config::load`] applies and the write target falls back to
-///   `<project_root>/stig.toml`.
-/// - `force`: when `true`, overwrite an existing `stig.toml`; when `false`,
-///   exit with code 2 if the file already exists.
+///   `--config`.  When `Some`, this is honoured as the write target (and read
+///   source if it already exists). When `None`, the `STIG_CONFIG` env var is
+///   checked, then an upward search from CWD is tried; if neither yields a
+///   file the write target defaults to `<project_root>/stig.toml`.
+/// - `force`: when `true`, overwrite an existing config file; when `false`,
+///   exit with code 2 if the target file already exists.
 pub fn run(config_path: Option<PathBuf>, force: bool) -> anyhow::Result<()> {
-    // Determine the write target for stig.toml up front.
-    // When --config names an existing file, honour it as the read source and
-    // write target. When it names a not-yet-existing file, treat that path as
-    // the write target (don't try to load it). When --config is absent, use
-    // the upward-search logic and fall back to <project_root>/stig.toml.
-    let explicit_path_exists = config_path.as_deref().is_some_and(|p| p.exists());
+    // Determine the canonical config path using the same precedence as
+    // Config::load (STIG_CONFIG > --config > upward search).  We do this
+    // before loading so we know the exact write target even for the
+    // STIG_CONFIG case where config_path is None.
+    //
+    // For a genuinely new project none of these will find a file, so
+    // resolved_path will be None and we fall back to writing stig.toml in the
+    // project_root determined by Config::load below.
+    let resolved_path = Config::resolve_path(config_path.as_deref(), None, None);
 
-    // Load config from the file only when it already exists.
-    let load_path: Option<&std::path::Path> = if explicit_path_exists {
-        config_path.as_deref()
-    } else {
-        None
-    };
+    // Load the effective config using the pre-resolved path, bypassing any
+    // further STIG_CONFIG / upward-search resolution. This prevents
+    // double-resolution where STIG_CONFIG points to a non-existent file and
+    // Config::load would error trying to read it.
+    let config = Config::load_from(resolved_path.as_deref(), None).map_err(anyhow::Error::from)?;
 
-    // start_dir: when an explicit (but absent) config path is given, use its
-    // parent so Config::load sets project_root correctly even without a file.
-    let explicit_parent: Option<PathBuf> = if config_path.is_some() && !explicit_path_exists {
-        config_path
-            .as_deref()
-            .and_then(|p| p.parent())
-            .map(|p| p.to_path_buf())
-    } else {
-        None
-    };
-
-    let config =
-        Config::load(load_path, None, explicit_parent.as_deref()).map_err(anyhow::Error::from)?;
-
-    // Resolve the final write target.
-    let toml_path = config_path
+    // Determine the write target:
+    //   1. Explicit --config path  (already in resolved_path via resolve_path)
+    //   2. STIG_CONFIG-resolved path (also in resolved_path)
+    //   3. <project_root>/stig.toml as a last resort
+    let toml_path = resolved_path
         .clone()
         .unwrap_or_else(|| config.project_root.join("stig.toml"));
 
@@ -69,15 +60,14 @@ pub fn run(config_path: Option<PathBuf>, force: bool) -> anyhow::Result<()> {
 
     // 1. Write stig.toml.
     // Always write a fresh default config so env-var overrides and values from
-    // any previously existing file are never persisted. `project_root` is set
-    // to the parent of the target path so relative paths within the written
-    // config resolve correctly regardless of CWD.
-    let project_root = toml_path
+    // any previously existing file are never persisted to disk.
+    // project_root is derived from the write target's parent directory.
+    let written_project_root = toml_path
         .parent()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| config.project_root.clone());
     let written_config = Config {
-        project_root,
+        project_root: written_project_root,
         ..Config::default()
     };
     written_config
@@ -85,21 +75,26 @@ pub fn run(config_path: Option<PathBuf>, force: bool) -> anyhow::Result<()> {
         .with_context(|| format!("failed to write {}", toml_path.display()))?;
     println!("✓ wrote stig.toml");
 
-    // All subsequent artifact creation uses `written_config` so the paths on
-    // disk are consistent with the config file that was just written.
+    // For artifact creation (dirs + DB) use the *loaded* config so that
+    // runtime overrides like STIG_DATABASE_PATH are respected: env vars are
+    // not persisted to the config file, but they do control which paths are
+    // initialized in this invocation.
+    //
+    // Use written_config's project_root to ensure relative paths are resolved
+    // against the directory where the config file was written.
+    let effective = Config {
+        project_root: written_config.project_root.clone(),
+        ..config
+    };
 
     // 2. Create migrations directory.
-    let migrations_dir = written_config
-        .project_root
-        .join(&written_config.migrations_dir);
+    let migrations_dir = effective.project_root.join(&effective.migrations_dir);
     std::fs::create_dir_all(&migrations_dir)
         .with_context(|| format!("failed to create {}", migrations_dir.display()))?;
-    println!("✓ created {}/", written_config.migrations_dir);
+    println!("✓ created {}/", effective.migrations_dir);
 
     // 3. Create backups directory tree + .gitignore.
-    let backups_dir = written_config
-        .project_root
-        .join(&written_config.backups_dir);
+    let backups_dir = effective.project_root.join(&effective.backups_dir);
     let snapshots_dir = backups_dir.join("snapshots");
     let resets_dir = backups_dir.join("resets");
     std::fs::create_dir_all(&snapshots_dir)
@@ -115,16 +110,12 @@ pub fn run(config_path: Option<PathBuf>, force: bool) -> anyhow::Result<()> {
     }
     println!(
         "✓ created {}/{{snapshots,resets}}/ (gitignored)",
-        written_config.backups_dir
+        effective.backups_dir
     );
 
     // 4. Open (or create) the database and ensure schema_migrations exists.
-    let db = Db::open(&written_config).with_context(|| {
-        format!(
-            "failed to open database at {}",
-            written_config.database_path
-        )
-    })?;
+    let db = Db::open(&effective)
+        .with_context(|| format!("failed to open database at {}", effective.database_path))?;
 
     db.connection().execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -134,10 +125,7 @@ pub fn run(config_path: Option<PathBuf>, force: bool) -> anyhow::Result<()> {
         );",
     )?;
 
-    println!(
-        "✓ created schema_migrations in {}",
-        written_config.database_path
-    );
+    println!("✓ created schema_migrations in {}", effective.database_path);
 
     Ok(())
 }
