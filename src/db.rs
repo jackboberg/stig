@@ -7,10 +7,11 @@
 //! # `:memory:` support
 //!
 //! Passing `":memory:"` as `database_path` opens an in-memory database.
-//! **Only the exact string `":memory:"` is recognised as in-memory** — URI
-//! forms such as `"file::memory:?cache=shared"` are treated as regular file
-//! paths and will be opened as files.  If you need URI in-memory databases,
-//! open the connection manually and apply PRAGMAs yourself.
+//! **Only the exact string `":memory:"` is recognised as in-memory.** All
+//! other strings — including URI forms such as `"file::memory:?cache=shared"`
+//! — are passed directly to [`rusqlite::Connection::open`] as filesystem
+//! paths.  URI mode is not enabled, so such strings are treated as literal
+//! path names and will likely produce an error.
 //!
 //! When running in-memory mode, `PRAGMA journal_mode = WAL` is intentionally
 //! skipped (WAL is incompatible with in-memory databases) and a warning is
