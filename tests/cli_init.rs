@@ -5,10 +5,34 @@ use predicates::prelude::*;
 use rusqlite::Connection;
 use tempfile::TempDir;
 
-/// Helper: run `stig init [args]` with the given working directory.
-fn stig_init(dir: &TempDir, extra_args: &[&str]) -> assert_cmd::assert::Assert {
+/// All environment variables that `stig` reads. Removing these from every
+/// subprocess prevents ambient shell variables set by the developer (or a
+/// previous test run) from corrupting assertions.
+const STIG_ENV_KEYS: &[&str] = &[
+    "STIG_CONFIG",
+    "STIG_DATABASE_PATH",
+    "DATABASE_PATH",
+    "STIG_MIGRATIONS_DIR",
+    "STIG_BACKUPS_DIR",
+    "STIG_NO_SNAPSHOT",
+    "STIG_NO_CHECKSUM",
+];
+
+/// Return a `stig` [`Command`] with all known `STIG_*` env vars removed and
+/// `current_dir` set to `dir`. Callers can add `.arg()` / `.env()` on top.
+fn stig_cmd(dir: &TempDir) -> Command {
     let mut cmd = Command::cargo_bin("stig").unwrap();
-    cmd.current_dir(dir.path()).arg("init");
+    cmd.current_dir(dir.path());
+    for key in STIG_ENV_KEYS {
+        cmd.env_remove(key);
+    }
+    cmd
+}
+
+/// Helper: run `stig init [args]` with a clean environment.
+fn stig_init(dir: &TempDir, extra_args: &[&str]) -> assert_cmd::assert::Assert {
+    let mut cmd = stig_cmd(dir);
+    cmd.arg("init");
     for arg in extra_args {
         cmd.arg(arg);
     }
@@ -131,10 +155,8 @@ fn init_does_not_persist_env_var_overrides_to_toml() {
     let dir = TempDir::new().unwrap();
 
     // Run init with STIG_DATABASE_PATH set in the environment.
-    let mut cmd = Command::cargo_bin("stig").unwrap();
-    cmd.current_dir(dir.path())
-        .arg("init")
-        .env("STIG_DATABASE_PATH", "from_env.db");
+    let mut cmd = stig_cmd(&dir);
+    cmd.arg("init").env("STIG_DATABASE_PATH", "from_env.db");
     cmd.assert().success();
 
     // The written stig.toml must contain the default database_path, not the
@@ -173,9 +195,8 @@ fn init_with_explicit_config_path_writes_to_that_path() {
     let custom_toml = dir.path().join("custom.toml");
 
     // Run init with an explicit --config path that does not exist yet.
-    let mut cmd = Command::cargo_bin("stig").unwrap();
-    cmd.current_dir(dir.path())
-        .args(["--config", custom_toml.to_str().unwrap(), "init"]);
+    let mut cmd = stig_cmd(&dir);
+    cmd.args(["--config", custom_toml.to_str().unwrap(), "init"]);
     cmd.assert().success();
 
     // The config must be written to the explicit path.
@@ -293,9 +314,8 @@ fn init_stig_config_env_var_controls_write_target() {
     let custom_toml = dir.path().join("custom.toml");
 
     // Run init with STIG_CONFIG pointing to a non-existent file.
-    let mut cmd = Command::cargo_bin("stig").unwrap();
-    cmd.current_dir(dir.path())
-        .arg("init")
+    let mut cmd = stig_cmd(&dir);
+    cmd.arg("init")
         .env("STIG_CONFIG", custom_toml.to_str().unwrap());
     cmd.assert().success();
 
