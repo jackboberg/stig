@@ -229,7 +229,64 @@ fn init_force_creates_artifacts_matching_written_config() {
 }
 
 // ---------------------------------------------------------------------------
-// 7. STIG_CONFIG env var controls the write target
+// 7. --force succeeds even when the existing stig.toml is invalid TOML
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_force_recovers_from_invalid_toml() {
+    let dir = TempDir::new().unwrap();
+
+    // Write a deliberately broken stig.toml.
+    let toml_path = dir.path().join("stig.toml");
+    std::fs::write(&toml_path, "this is not valid toml ][[[").unwrap();
+
+    // Without --force this should still exit 2 (file exists).
+    stig_init(&dir, &[])
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("already exists"));
+
+    // With --force it should succeed and overwrite with defaults.
+    stig_init(&dir, &["--force"]).success();
+
+    let toml_after = std::fs::read_to_string(&toml_path).unwrap();
+    assert!(
+        toml_after.contains("app.db"),
+        "stig.toml should contain default database_path after --force recovery"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 8. schema_migrations checksum column has no default (SPEC §5)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn schema_migrations_checksum_has_no_default() {
+    let dir = TempDir::new().unwrap();
+    stig_init(&dir, &[]).success();
+
+    let conn = Connection::open(dir.path().join("app.db")).unwrap();
+
+    // Inserting a row without supplying checksum must fail (NOT NULL, no default).
+    let result = conn.execute(
+        "INSERT INTO schema_migrations (version, applied_at) VALUES ('20260101000000_test', datetime('now'))",
+        [],
+    );
+    assert!(
+        result.is_err(),
+        "INSERT without checksum should fail due to NOT NULL constraint"
+    );
+
+    // Supplying checksum explicitly must succeed.
+    conn.execute(
+        "INSERT INTO schema_migrations (version, checksum) VALUES ('20260101000000_test', 'abc123')",
+        [],
+    )
+    .expect("INSERT with explicit checksum should succeed");
+}
+
+// ---------------------------------------------------------------------------
+// 9. STIG_CONFIG env var controls the write target
 // ---------------------------------------------------------------------------
 
 #[test]

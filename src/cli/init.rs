@@ -19,37 +19,33 @@ use crate::errors::CliError;
 ///
 /// - `config_path`: optional explicit path to `stig.toml` supplied via
 ///   `--config`.  When `Some`, this is honoured as the write target (and read
-///   source if it already exists). When `None`, the `STIG_CONFIG` env var is
-///   checked, then an upward search from CWD is tried; if neither yields a
-///   file the write target defaults to `<project_root>/stig.toml`.
-/// - `force`: when `true`, overwrite an existing config file; when `false`,
-///   exit with code 2 if the target file already exists.
+///   source if it already exists and `--force` is not passed). When `None`,
+///   the `STIG_CONFIG` env var is checked (after loading `.env`), then an
+///   upward search from CWD is tried; if neither yields a file the write
+///   target defaults to `<cwd>/stig.toml`.
+/// - `force`: when `true`, overwrite an existing config file without reading
+///   it (so invalid TOML is also recoverable); when `false`, exit with code 2
+///   if the target file already exists.
 pub fn run(config_path: Option<PathBuf>, force: bool) -> anyhow::Result<()> {
-    // Determine the canonical config path using the same precedence as
-    // Config::load (STIG_CONFIG > --config > upward search).  We do this
-    // before loading so we know the exact write target even for the
-    // STIG_CONFIG case where config_path is None.
-    //
-    // For a genuinely new project none of these will find a file, so
-    // resolved_path will be None and we fall back to writing stig.toml in the
-    // project_root determined by Config::load below.
+    // Load .env first so that STIG_CONFIG defined there is visible to
+    // resolve_path. Config::load_from also calls this; dotenvy is idempotent.
+    dotenvy::dotenv().ok();
+
+    // Determine the canonical config path: STIG_CONFIG > --config > upward
+    // search. We need this before loading so we know the exact write target.
     let resolved_path = Config::resolve_path(config_path.as_deref(), None, None);
 
-    // Load the effective config using the pre-resolved path, bypassing any
-    // further STIG_CONFIG / upward-search resolution. This prevents
-    // double-resolution where STIG_CONFIG points to a non-existent file and
-    // Config::load would error trying to read it.
-    let config = Config::load_from(resolved_path.as_deref(), None).map_err(anyhow::Error::from)?;
-
-    // Determine the write target:
-    //   1. Explicit --config path  (already in resolved_path via resolve_path)
-    //   2. STIG_CONFIG-resolved path (also in resolved_path)
-    //   3. <project_root>/stig.toml as a last resort
-    let toml_path = resolved_path
-        .clone()
-        .unwrap_or_else(|| config.project_root.join("stig.toml"));
+    // Derive the write target from the resolved path, falling back to
+    // <cwd>/stig.toml when no existing file was found.
+    let toml_path = resolved_path.clone().unwrap_or_else(|| {
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join("stig.toml")
+    });
 
     // Guard: refuse to overwrite an existing config unless --force was passed.
+    // This check happens before any file I/O so that --force can recover from
+    // an invalid (unreadable/unparseable) existing config.
     if toml_path.exists() && !force {
         return Err(CliError::Usage(format!(
             "{} already exists; run with --force to overwrite",
@@ -58,16 +54,26 @@ pub fn run(config_path: Option<PathBuf>, force: bool) -> anyhow::Result<()> {
         .into());
     }
 
-    // 1. Write stig.toml.
-    // Always write a fresh default config so env-var overrides and values from
-    // any previously existing file are never persisted to disk.
-    // project_root is derived from the write target's parent directory.
-    let written_project_root = toml_path
+    // project_root is the directory that will contain stig.toml.
+    let project_root = toml_path
         .parent()
-        .map(|p| p.to_path_buf())
-        .unwrap_or_else(|| config.project_root.clone());
+        .map(|p| {
+            // canonicalize so relative paths (e.g. bare "stig.toml") resolve
+            // against CWD rather than producing an empty component.
+            if p == std::path::Path::new("") {
+                std::env::current_dir().unwrap_or_else(|_| p.to_path_buf())
+            } else {
+                p.to_path_buf()
+            }
+        })
+        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+
+    // 1. Write stig.toml with defaults.
+    // Always write Config::default() so neither env-var overrides nor values
+    // from a previously existing (possibly mutated or invalid) file are
+    // persisted to disk.
     let written_config = Config {
-        project_root: written_project_root,
+        project_root: project_root.clone(),
         ..Config::default()
     };
     written_config
@@ -75,16 +81,15 @@ pub fn run(config_path: Option<PathBuf>, force: bool) -> anyhow::Result<()> {
         .with_context(|| format!("failed to write {}", toml_path.display()))?;
     println!("✓ wrote stig.toml");
 
-    // For artifact creation (dirs + DB) use the *loaded* config so that
-    // runtime overrides like STIG_DATABASE_PATH are respected: env vars are
-    // not persisted to the config file, but they do control which paths are
-    // initialized in this invocation.
-    //
-    // Use written_config's project_root to ensure relative paths are resolved
-    // against the directory where the config file was written.
-    let effective = Config {
-        project_root: written_config.project_root.clone(),
-        ..config
+    // Build the effective config for artifact creation: start from the
+    // freshly written defaults (correct paths) and layer real process env
+    // overrides on top (e.g. STIG_DATABASE_PATH). This ensures artifacts are
+    // consistent with the written config while still honouring runtime env
+    // vars that are intentionally not persisted.
+    let effective = {
+        let mut c = written_config.clone();
+        c.apply_env_overrides(None);
+        c
     };
 
     // 2. Create migrations directory.
@@ -117,10 +122,12 @@ pub fn run(config_path: Option<PathBuf>, force: bool) -> anyhow::Result<()> {
     let db = Db::open(&effective)
         .with_context(|| format!("failed to open database at {}", effective.database_path))?;
 
+    // Schema per SPEC §5: checksum has no DEFAULT so every applied migration
+    // must explicitly supply its SHA-256.
     db.connection().execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (
             version    TEXT NOT NULL PRIMARY KEY,
-            checksum   TEXT NOT NULL DEFAULT '',
+            checksum   TEXT NOT NULL,
             applied_at TEXT NOT NULL DEFAULT (datetime('now'))
         );",
     )?;

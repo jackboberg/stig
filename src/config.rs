@@ -456,7 +456,7 @@ impl Config {
     }
 
     /// Apply all environment-variable overrides to `self`.
-    fn apply_env_overrides(&mut self, env: Option<&HashMap<String, String>>) {
+    pub(crate) fn apply_env_overrides(&mut self, env: Option<&HashMap<String, String>>) {
         // STIG_DATABASE_PATH or DATABASE_PATH
         if let Some(v) =
             Self::env_get(env, "STIG_DATABASE_PATH").or_else(|| Self::env_get(env, "DATABASE_PATH"))
@@ -994,5 +994,53 @@ mod tests {
         assert_eq!(loaded.snapshot_keep, 10);
         assert!(!loaded.auto_snapshot);
         assert_eq!(loaded.pragmas.journal_mode, "DELETE");
+    }
+
+    // -----------------------------------------------------------------------
+    // 11. Config::load_from
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn load_from_uses_defaults_when_path_is_none() {
+        let dir = TempDir::new().unwrap();
+        let config = Config::load_from(None, Some(dir.path())).unwrap();
+        assert_eq!(config.database_path, Config::default().database_path);
+        assert_eq!(config.project_root, dir.path());
+    }
+
+    #[test]
+    fn load_from_reads_existing_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("stig.toml");
+        let original = Config {
+            project_root: dir.path().to_path_buf(),
+            database_path: "mydb.db".to_string(),
+            ..Config::default()
+        };
+        original.write(&path).unwrap();
+
+        let loaded = Config::load_from(Some(&path), None).unwrap();
+        assert_eq!(loaded.database_path, "mydb.db");
+        assert_eq!(loaded.project_root, dir.path().canonicalize().unwrap());
+    }
+
+    #[test]
+    fn load_from_uses_defaults_for_nonexistent_path() {
+        let dir = TempDir::new().unwrap();
+        let absent = dir.path().join("does_not_exist.toml");
+        // Non-existent path: should not error, should use defaults with
+        // project_root derived from the absent path's parent.
+        let config = Config::load_from(Some(&absent), None).unwrap();
+        assert_eq!(config.database_path, Config::default().database_path);
+        assert_eq!(config.project_root, dir.path());
+    }
+
+    #[test]
+    fn load_from_returns_error_for_invalid_toml() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("bad.toml");
+        std::fs::write(&path, "not valid toml ][[[").unwrap();
+        let result = Config::load_from(Some(&path), None);
+        assert!(result.is_err(), "invalid TOML should return an error");
     }
 }
