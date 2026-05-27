@@ -150,3 +150,68 @@ fn init_does_not_persist_env_var_overrides_to_toml() {
         "stig.toml should contain the default database_path"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 5. --config writes to the explicit path, not project_root/stig.toml
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_with_explicit_config_path_writes_to_that_path() {
+    let dir = TempDir::new().unwrap();
+    let custom_toml = dir.path().join("custom.toml");
+
+    // Run init with an explicit --config path that does not exist yet.
+    let mut cmd = Command::cargo_bin("stig").unwrap();
+    cmd.current_dir(dir.path())
+        .args(["--config", custom_toml.to_str().unwrap(), "init"]);
+    cmd.assert().success();
+
+    // The config must be written to the explicit path.
+    assert!(custom_toml.is_file(), "custom.toml should be written");
+
+    // The default stig.toml must NOT be created (we used an explicit path).
+    assert!(
+        !dir.path().join("stig.toml").exists(),
+        "stig.toml should not be created when --config is an explicit path"
+    );
+
+    // Artifacts should be created relative to the config file's parent
+    // (which is dir.path() here).
+    assert!(dir.path().join("db/migrations").is_dir());
+    assert!(dir.path().join(".local/db-backups/snapshots").is_dir());
+    assert!(dir.path().join("app.db").is_file());
+}
+
+// ---------------------------------------------------------------------------
+// 6. --force uses written config's paths for all artifacts
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_force_creates_artifacts_matching_written_config() {
+    let dir = TempDir::new().unwrap();
+
+    // First run to produce the initial config.
+    stig_init(&dir, &[]).success();
+
+    // Mutate stig.toml so migrations_dir points somewhere non-default.
+    let toml_path = dir.path().join("stig.toml");
+    let original = std::fs::read_to_string(&toml_path).unwrap();
+    let modified = original.replace("db/migrations", "custom/migrations");
+    std::fs::write(&toml_path, &modified).unwrap();
+
+    // Run --force: should succeed and write a default config.
+    stig_init(&dir, &["--force"]).success();
+
+    // The written config should reference the default migrations_dir.
+    let toml_after = std::fs::read_to_string(&toml_path).unwrap();
+    assert!(toml_after.contains("db/migrations"));
+
+    // The default artifacts must exist (not the mutated paths).
+    assert!(dir.path().join("db/migrations").is_dir());
+    // schema_migrations must be in the default app.db, not a custom path.
+    let conn = Connection::open(dir.path().join("app.db")).unwrap();
+    conn.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
+        row.get::<_, i64>(0)
+    })
+    .expect("schema_migrations should exist in app.db after --force");
+}
