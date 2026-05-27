@@ -1,9 +1,15 @@
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 use stig::errors::CliError;
 
 #[derive(Debug, Parser)]
 #[command(name = "stig", about = "A SQLite migration and schema CLI", version)]
 struct Cli {
+    /// Path to the stig.toml config file (default: walk upward from CWD).
+    #[arg(long, global = true)]
+    config: Option<PathBuf>,
+
     #[command(subcommand)]
     command: Command,
 }
@@ -11,7 +17,11 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Initialize a new stig project in the current directory.
-    Init,
+    Init {
+        /// Overwrite an existing stig.toml config file.
+        #[arg(long)]
+        force: bool,
+    },
     /// Create a new migration file.
     New,
     /// Apply pending migrations.
@@ -32,7 +42,7 @@ fn main() {
     let cli = Cli::parse();
 
     let result: Result<(), anyhow::Error> = match cli.command {
-        Command::Init => stig::cli::init::run(),
+        Command::Init { force } => stig::cli::init::run(cli.config, force),
         Command::New => stig::cli::new::run(),
         Command::Migrate => stig::cli::migrate::run(),
         Command::Status => stig::cli::status::run(),
@@ -43,7 +53,9 @@ fn main() {
     };
 
     if let Err(e) = result {
-        let cli_err = CliError::Generic(e);
+        // Try to downcast to a typed CliError (which carries a specific exit
+        // code) before falling back to the generic exit-1 wrapper.
+        let cli_err = e.downcast::<CliError>().unwrap_or_else(CliError::Generic);
         eprintln!("{cli_err}");
         std::process::exit(cli_err.exit_code());
     }
