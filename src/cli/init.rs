@@ -26,8 +26,7 @@ pub fn run(config_path: Option<PathBuf>, force: bool) -> anyhow::Result<()> {
     // Load config (or defaults when no file exists yet). We pass start_dir =
     // None so Config::load uses the real CWD as the project root — which is
     // exactly where `init` should write its files.
-    let config =
-        Config::load(config_path.as_deref(), None, None).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let config = Config::load(config_path.as_deref(), None, None).map_err(anyhow::Error::from)?;
 
     let toml_path = config.project_root.join("stig.toml");
 
@@ -41,24 +40,18 @@ pub fn run(config_path: Option<PathBuf>, force: bool) -> anyhow::Result<()> {
     }
 
     // 1. Write stig.toml.
-    // When --force is active, always write a fresh default config (not the
-    // loaded one, which may have been read from the existing mutated file).
-    let config_to_write = if force && toml_path.exists() {
-        Config {
-            project_root: config.project_root.clone(),
-            ..Config::default()
-        }
-    } else {
-        config.clone()
+    // Always write a fresh default config — never persist env-var overrides or
+    // values from an existing (possibly mutated) file. The loaded `config` is
+    // used below only to determine runtime paths (e.g. which DB to open), not
+    // as the content of the new config file.
+    let default_config = Config {
+        project_root: config.project_root.clone(),
+        ..Config::default()
     };
-    config_to_write
+    default_config
         .write(&toml_path)
         .with_context(|| format!("failed to write {}", toml_path.display()))?;
     println!("✓ wrote stig.toml");
-
-    // Use config_to_write for all subsequent path resolution so the paths
-    // we create match the config we actually wrote to disk.
-    let config = config_to_write;
 
     // 2. Create migrations directory.
     let migrations_dir = config.project_root.join(&config.migrations_dir);

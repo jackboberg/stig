@@ -121,3 +121,32 @@ fn init_force_overwrites_config() {
         "stig.toml should contain the default database_path after --force"
     );
 }
+
+// ---------------------------------------------------------------------------
+// 4. Env-var overrides must not be persisted to stig.toml
+// ---------------------------------------------------------------------------
+
+#[test]
+fn init_does_not_persist_env_var_overrides_to_toml() {
+    let dir = TempDir::new().unwrap();
+
+    // Run init with STIG_DATABASE_PATH set in the environment.
+    let mut cmd = Command::cargo_bin("stig").unwrap();
+    cmd.current_dir(dir.path())
+        .arg("init")
+        .env("STIG_DATABASE_PATH", "from_env.db");
+    cmd.assert().success();
+
+    // The written stig.toml must contain the default database_path, not the
+    // env-var value — env overrides are runtime-only and must not be baked
+    // into the config file.
+    let toml = std::fs::read_to_string(dir.path().join("stig.toml")).unwrap();
+    assert!(
+        !toml.contains("from_env.db"),
+        "stig.toml must not contain env-var value STIG_DATABASE_PATH=from_env.db"
+    );
+    assert!(
+        toml.contains("app.db"),
+        "stig.toml should contain the default database_path"
+    );
+}
