@@ -11,9 +11,10 @@
 //! 4. Built-in defaults ([`Default`] impl)
 
 use std::collections::HashMap;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::errors::CliError;
 
@@ -22,7 +23,7 @@ use crate::errors::CliError;
 // ---------------------------------------------------------------------------
 
 /// SQLite PRAGMAs applied on every connection open (`[pragmas]` table).
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Pragmas {
     /// `PRAGMA journal_mode`. Defaults to `"WAL"`.
     #[serde(default = "default_journal_mode")]
@@ -51,7 +52,7 @@ fn default_foreign_keys() -> String {
 }
 
 /// A single codegen target entry (`[[generate]]` array).
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct GenerateTarget {
     /// Target kind. Currently only `"typescript"` is supported.
     pub kind: String,
@@ -94,7 +95,7 @@ pub struct CliOverrides {
 // ---------------------------------------------------------------------------
 
 /// Resolved configuration for a `stig` invocation.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Config {
     /// The project root directory: the parent of the `stig.toml` file when
     /// one is found, or `start_dir` when supplied to [`Config::load`], or the
@@ -295,6 +296,20 @@ impl Config {
         if let Some(v) = overrides.checksum_check {
             self.checksum_check = v;
         }
+    }
+
+    /// Serialize this config to TOML and write it to `path`.
+    ///
+    /// `project_root` is skipped during serialization (it has `#[serde(skip)]`)
+    /// so the written file only contains the portable, transferable fields.
+    pub fn write(&self, path: &Path) -> anyhow::Result<()> {
+        let toml_str = toml::to_string(self)
+            .map_err(|e| anyhow::anyhow!("failed to serialize config: {e}"))?;
+        let mut file = std::fs::File::create(path)
+            .map_err(|e| anyhow::anyhow!("failed to create {}: {e}", path.display()))?;
+        file.write_all(toml_str.as_bytes())
+            .map_err(|e| anyhow::anyhow!("failed to write {}: {e}", path.display()))?;
+        Ok(())
     }
 
     // -----------------------------------------------------------------------
@@ -843,5 +858,60 @@ mod tests {
             "load() must not read the real process env when an injected map is provided"
         );
         assert_eq!(cfg.database_path, Config::default().database_path);
+    }
+
+    // -----------------------------------------------------------------------
+    // 10. Config::write round-trips through Config::load
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn write_round_trips_default_config() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("stig.toml");
+
+        let original = Config {
+            project_root: dir.path().to_path_buf(),
+            ..Config::default()
+        };
+        original.write(&config_path).unwrap();
+
+        // The file must exist and be valid TOML that round-trips cleanly.
+        let loaded = Config::load(Some(&config_path), Some(&empty_env()), None).unwrap();
+        assert_eq!(loaded.database_path, original.database_path);
+        assert_eq!(loaded.migrations_dir, original.migrations_dir);
+        assert_eq!(loaded.backups_dir, original.backups_dir);
+        assert_eq!(loaded.snapshot_keep, original.snapshot_keep);
+        assert_eq!(loaded.reset_keep, original.reset_keep);
+        assert_eq!(loaded.auto_snapshot, original.auto_snapshot);
+        assert_eq!(loaded.checksum_check, original.checksum_check);
+        assert_eq!(loaded.pragmas, original.pragmas);
+        assert_eq!(loaded.generate, original.generate);
+    }
+
+    #[test]
+    fn write_non_default_values_round_trip() {
+        let dir = TempDir::new().unwrap();
+        let config_path = dir.path().join("stig.toml");
+
+        let original = Config {
+            project_root: dir.path().to_path_buf(),
+            database_path: "custom.db".to_string(),
+            migrations_dir: "schema/migrations".to_string(),
+            snapshot_keep: 10,
+            auto_snapshot: false,
+            pragmas: Pragmas {
+                journal_mode: "DELETE".to_string(),
+                foreign_keys: "ON".to_string(),
+            },
+            ..Config::default()
+        };
+        original.write(&config_path).unwrap();
+
+        let loaded = Config::load(Some(&config_path), Some(&empty_env()), None).unwrap();
+        assert_eq!(loaded.database_path, "custom.db");
+        assert_eq!(loaded.migrations_dir, "schema/migrations");
+        assert_eq!(loaded.snapshot_keep, 10);
+        assert!(!loaded.auto_snapshot);
+        assert_eq!(loaded.pragmas.journal_mode, "DELETE");
     }
 }
