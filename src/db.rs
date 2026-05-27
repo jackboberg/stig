@@ -15,7 +15,9 @@
 //!
 //! When running in-memory mode, `PRAGMA journal_mode = WAL` is intentionally
 //! skipped (WAL is incompatible with in-memory databases) and a warning is
-//! emitted.  Snapshot and reset operations are also disabled in this mode.
+//! emitted.  Snapshot and reset operations are not supported in this mode;
+//! higher-level commands are responsible for checking [`Db::is_memory`] and
+//! declining to proceed.
 
 use std::path::{Path, PathBuf};
 
@@ -43,7 +45,7 @@ impl Db {
     ///   settle to the requested value (e.g. WAL is unsupported on the
     ///   underlying filesystem).
     /// - For `:memory:`: skips `journal_mode` (WAL-incompatible) and emits a
-    ///   warning that snapshot/reset features are disabled.  `foreign_keys` is
+    ///   warning that snapshot/reset operations are not supported in this mode.  `foreign_keys` is
     ///   still applied.
     pub fn open(config: &Config) -> Result<Self> {
         let raw = &config.database_path;
@@ -61,7 +63,9 @@ impl Db {
         };
 
         let conn = if is_memory {
-            warn!("database_path is \":memory:\": snapshots and resets are disabled");
+            warn!(
+                "database_path is \":memory:\": snapshots and resets are not supported in this mode"
+            );
             Connection::open_in_memory().context("failed to open in-memory SQLite database")?
         } else {
             Connection::open(&resolved)
