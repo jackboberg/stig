@@ -1,7 +1,9 @@
 //! Implementation of `stig init`.
 //!
 //! Bootstraps a new project:
-//! - Writes `stig.toml` with default values (or overwrites with `--force`).
+//! - Writes `stig.toml` capturing the fully-resolved config (defaults merged
+//!   with env-var and CLI overrides) so that the initialized file reflects the
+//!   user's explicit intent.
 //! - Creates the migrations directory.
 //! - Creates the backups directory tree (`snapshots/`, `resets/`) with a
 //!   `.gitignore` that excludes everything.
@@ -9,7 +11,6 @@
 
 use anyhow::Context as _;
 
-use crate::config::Config;
 use crate::context::{ConfigSource, RuntimeContext};
 use crate::db::Db;
 use crate::errors::CliError;
@@ -17,8 +18,10 @@ use crate::errors::CliError;
 /// Run `stig init`.
 ///
 /// - `ctx`: the fully-resolved runtime context built by `main`. `init` uses
-///   `ctx.config_path` as the write target (falling back to `<cwd>/stig.toml`)
-///   and `ctx.config_source` to determine whether an existing file is present.
+///   `ctx.config_path` as the write target (falling back to `<cwd>/stig.toml`),
+///   `ctx.config_source` to determine whether an existing file is present, and
+///   `ctx.config` as the content to write — so env-var and CLI overrides are
+///   persisted to `stig.toml` rather than being silently discarded.
 /// - `force`: when `true`, overwrite an existing config file; when `false`,
 ///   exit with code 2 if the target file already exists.
 pub fn run(ctx: &RuntimeContext, force: bool) -> anyhow::Result<()> {
@@ -50,31 +53,24 @@ pub fn run(ctx: &RuntimeContext, force: bool) -> anyhow::Result<()> {
         })
         .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
 
-    // 1. Write stig.toml with defaults.
-    // Always write Config::default() so neither env-var overrides nor values
-    // from a previously existing file are persisted to disk.
-    let written_config = Config {
+    // 1. Write stig.toml with the fully-resolved config.
+    //
+    // ctx.config already has env-var overrides applied by RuntimeContext::build.
+    // Writing it directly means the initialized file captures the user's explicit
+    // intent (env vars, future CLI flags) rather than silently discarding them.
+    // project_root is #[serde(skip)] so it is never written to the file.
+    let config_to_write = crate::config::Config {
         project_root: project_root.clone(),
-        ..Config::default()
+        ..ctx.config.clone()
     };
-    written_config
+    config_to_write
         .write(&toml_path)
         .with_context(|| format!("failed to write {}", toml_path.display()))?;
     println!("✓ wrote stig.toml");
 
-    // Build the effective config for artifact creation: start from the
-    // freshly written defaults (correct paths) and layer runtime env overrides
-    // from ctx.config on top. ctx.config already has env overrides applied by
-    // RuntimeContext::build, so we borrow its runtime-only fields.
-    let effective = Config {
-        project_root: project_root.clone(),
-        database_path: ctx.config.database_path.clone(),
-        migrations_dir: ctx.config.migrations_dir.clone(),
-        backups_dir: ctx.config.backups_dir.clone(),
-        auto_snapshot: ctx.config.auto_snapshot,
-        checksum_check: ctx.config.checksum_check,
-        ..written_config.clone()
-    };
+    // Use the same config for artifact creation — file and artifacts are
+    // always consistent with each other.
+    let effective = config_to_write;
 
     // 2. Create migrations directory.
     let migrations_dir = effective.project_root.join(&effective.migrations_dir);

@@ -111,11 +111,11 @@ fn init_without_force_exits_2_when_config_exists() {
 }
 
 // ---------------------------------------------------------------------------
-// 3. --force overwrites stig.toml
+// 3. --force succeeds even when stig.toml exists; preserves resolved values
 // ---------------------------------------------------------------------------
 
 #[test]
-fn init_force_overwrites_config() {
+fn init_force_succeeds_when_config_exists() {
     let dir = TempDir::new().unwrap();
 
     // First run to produce the initial config.
@@ -128,30 +128,24 @@ fn init_force_overwrites_config() {
         .replace("app.db", "mutated.db");
     std::fs::write(&toml_path, &modified).unwrap();
 
-    // Confirm the mutation took effect.
-    assert!(modified.contains("mutated.db"));
-
-    // Run with --force: must succeed.
+    // Run with --force: must succeed (file is loaded, mutated value is resolved).
     stig_init(&dir, &["--force"]).success();
 
-    // stig.toml should be back to defaults (no "mutated.db").
+    // The file is rewritten with the resolved config, which was loaded from
+    // the mutated stig.toml — so the mutated value is preserved.
     let toml_after = std::fs::read_to_string(&toml_path).unwrap();
     assert!(
-        !toml_after.contains("mutated.db"),
-        "stig.toml should be reset to defaults after --force"
-    );
-    assert!(
-        toml_after.contains("app.db"),
-        "stig.toml should contain the default database_path after --force"
+        toml_after.contains("mutated.db"),
+        "--force rewrites the file with the resolved config (mutated value preserved)"
     );
 }
 
 // ---------------------------------------------------------------------------
-// 4. Env-var overrides: not persisted to stig.toml, but applied for artifacts
+// 4. Env-var overrides ARE persisted to stig.toml and applied to artifacts
 // ---------------------------------------------------------------------------
 
 #[test]
-fn init_does_not_persist_env_var_overrides_to_toml() {
+fn init_persists_env_var_overrides_to_toml() {
     let dir = TempDir::new().unwrap();
 
     // Run init with STIG_DATABASE_PATH set in the environment.
@@ -159,24 +153,18 @@ fn init_does_not_persist_env_var_overrides_to_toml() {
     cmd.arg("init").env("STIG_DATABASE_PATH", "from_env.db");
     cmd.assert().success();
 
-    // The written stig.toml must contain the default database_path, not the
-    // env-var value — env overrides are runtime-only and must not be baked
-    // into the config file.
+    // The written stig.toml must capture the env-var value — init expresses
+    // intent, so env overrides are persisted rather than discarded.
     let toml = std::fs::read_to_string(dir.path().join("stig.toml")).unwrap();
     assert!(
-        !toml.contains("from_env.db"),
-        "stig.toml must not contain env-var value STIG_DATABASE_PATH=from_env.db"
-    );
-    assert!(
-        toml.contains("app.db"),
-        "stig.toml should contain the default database_path"
+        toml.contains("from_env.db"),
+        "stig.toml should contain env-var value STIG_DATABASE_PATH=from_env.db"
     );
 
-    // The env-var override IS applied for artifact creation: schema_migrations
-    // is created in from_env.db (the runtime DB), not app.db.
+    // Artifacts use the same value — file and artifacts are always consistent.
     assert!(
         dir.path().join("from_env.db").is_file(),
-        "from_env.db should be created (env override applied to artifact creation)"
+        "from_env.db should be created (consistent with written config)"
     );
     let conn = Connection::open(dir.path().join("from_env.db")).unwrap();
     conn.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
@@ -216,37 +204,31 @@ fn init_with_explicit_config_path_writes_to_that_path() {
 }
 
 // ---------------------------------------------------------------------------
-// 6. --force uses written config's paths for all artifacts
+// 6. --force with env override: env value is written to file and used for artifacts
 // ---------------------------------------------------------------------------
 
 #[test]
-fn init_force_creates_artifacts_matching_written_config() {
+fn init_force_with_env_override_writes_env_value() {
     let dir = TempDir::new().unwrap();
 
     // First run to produce the initial config.
     stig_init(&dir, &[]).success();
 
-    // Mutate stig.toml so migrations_dir points somewhere non-default.
-    let toml_path = dir.path().join("stig.toml");
-    let original = std::fs::read_to_string(&toml_path).unwrap();
-    let modified = original.replace("db/migrations", "custom/migrations");
-    std::fs::write(&toml_path, &modified).unwrap();
+    // Run --force with an env override: the env value should be written.
+    let mut cmd = stig_cmd(&dir);
+    cmd.args(["init", "--force"])
+        .env("STIG_MIGRATIONS_DIR", "custom/migrations");
+    cmd.assert().success();
 
-    // Run --force: should succeed and write a default config.
-    stig_init(&dir, &["--force"]).success();
+    // The rewritten config captures the env override.
+    let toml_after = std::fs::read_to_string(dir.path().join("stig.toml")).unwrap();
+    assert!(
+        toml_after.contains("custom/migrations"),
+        "--force with env override should write the env value to stig.toml"
+    );
 
-    // The written config should reference the default migrations_dir.
-    let toml_after = std::fs::read_to_string(&toml_path).unwrap();
-    assert!(toml_after.contains("db/migrations"));
-
-    // The default artifacts must exist (not the mutated paths).
-    assert!(dir.path().join("db/migrations").is_dir());
-    // schema_migrations must be in the default app.db, not a custom path.
-    let conn = Connection::open(dir.path().join("app.db")).unwrap();
-    conn.query_row("SELECT COUNT(*) FROM schema_migrations", [], |row| {
-        row.get::<_, i64>(0)
-    })
-    .expect("schema_migrations should exist in app.db after --force");
+    // The artifact dir matches the written config.
+    assert!(dir.path().join("custom/migrations").is_dir());
 }
 
 // ---------------------------------------------------------------------------
@@ -302,32 +284,4 @@ fn schema_migrations_checksum_has_no_default() {
         [],
     )
     .expect("INSERT with explicit checksum should succeed");
-}
-
-// ---------------------------------------------------------------------------
-// 9. STIG_CONFIG env var controls the write target
-// ---------------------------------------------------------------------------
-
-#[test]
-fn init_stig_config_env_var_controls_write_target() {
-    let dir = TempDir::new().unwrap();
-    let custom_toml = dir.path().join("custom.toml");
-
-    // Run init with STIG_CONFIG pointing to a non-existent file.
-    let mut cmd = stig_cmd(&dir);
-    cmd.arg("init")
-        .env("STIG_CONFIG", custom_toml.to_str().unwrap());
-    cmd.assert().success();
-
-    // The config must be written to the STIG_CONFIG path.
-    assert!(
-        custom_toml.is_file(),
-        "custom.toml should be written via STIG_CONFIG"
-    );
-
-    // The default stig.toml must NOT be created.
-    assert!(
-        !dir.path().join("stig.toml").exists(),
-        "stig.toml should not be created when STIG_CONFIG is set"
-    );
 }

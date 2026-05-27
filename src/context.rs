@@ -255,32 +255,87 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // Defaults with env overrides
+    // Defaults + partial env override — the init write contract
     // -----------------------------------------------------------------------
 
+    /// When no config file exists, a partial env override produces a config
+    /// where the overridden field takes the env value and all other fields
+    /// remain at their built-in defaults. This is what `init` writes to disk.
     #[test]
-    fn defaults_source_still_applies_env_overrides() {
+    fn partial_env_override_merges_with_defaults() {
         let dir = TempDir::new().unwrap();
-        let absent = dir.path().join("stig.toml"); // doesn't exist
+        // Point STIG_CONFIG at a non-existent path so the upward search is
+        // bypassed and we get a clean Defaults context.
+        let absent = dir.path().join("stig.toml");
+        let mut env = empty_env();
+        env.insert("STIG_CONFIG".into(), absent.to_str().unwrap().into());
+        env.insert("STIG_DATABASE_PATH".into(), "custom.db".into());
 
-        // Use STIG_CONFIG pointing to an absent file — this would be an
-        // explicit path error. Instead, verify via a search-based no-file
-        // scenario with env overrides applied from the map.
-        // Use a dir that has no stig.toml; don't set STIG_CONFIG so search falls through.
-        // We can't easily control the upward search from here without start_dir,
-        // so we test the Defaults path indirectly through build_inner.
-        // The key invariant: when ConfigSource::Defaults, env overrides still apply.
+        let ctx = RuntimeContext::build_with_env(None, env).unwrap();
 
-        // Build via the internal path: inject env with a db path override,
-        // no config file in scope.
-        let _ = absent; // unused in this approach
+        assert_eq!(ctx.config_source, ConfigSource::Defaults);
+        // Overridden field reflects the env value.
+        assert_eq!(ctx.config.database_path, "custom.db");
+        // Unset fields remain at defaults.
+        assert_eq!(
+            ctx.config.migrations_dir,
+            crate::config::Config::default().migrations_dir
+        );
+        assert_eq!(
+            ctx.config.backups_dir,
+            crate::config::Config::default().backups_dir
+        );
+        assert_eq!(
+            ctx.config.snapshot_keep,
+            crate::config::Config::default().snapshot_keep
+        );
+        assert!(ctx.config.auto_snapshot); // default is true
+        assert!(ctx.config.checksum_check); // default is true
+    }
 
-        // Use STIG_CONFIG to a non-existent path — would cause an error.
-        // Instead: use the map-based build with no STIG_CONFIG and rely on
-        // the upward search producing no result when tested from a dir with
-        // no stig.toml ancestors (we can't guarantee that from the test dir).
-        // This test is best done at the Config level; the context-level test
-        // above (env_database_path_override_applied) covers the file path.
-        // Document the gap and skip.
+    /// Multiple env overrides are all applied simultaneously.
+    #[test]
+    fn multiple_env_overrides_all_applied() {
+        let dir = TempDir::new().unwrap();
+        let absent = dir.path().join("stig.toml");
+        let mut env = empty_env();
+        env.insert("STIG_CONFIG".into(), absent.to_str().unwrap().into());
+        env.insert("STIG_DATABASE_PATH".into(), "prod.db".into());
+        env.insert("STIG_MIGRATIONS_DIR".into(), "schema/migrations".into());
+        env.insert("STIG_BACKUPS_DIR".into(), "backups".into());
+        env.insert("STIG_NO_SNAPSHOT".into(), "1".into());
+        env.insert("STIG_NO_CHECKSUM".into(), "1".into());
+
+        let ctx = RuntimeContext::build_with_env(None, env).unwrap();
+
+        assert_eq!(ctx.config.database_path, "prod.db");
+        assert_eq!(ctx.config.migrations_dir, "schema/migrations");
+        assert_eq!(ctx.config.backups_dir, "backups");
+        assert!(!ctx.config.auto_snapshot);
+        assert!(!ctx.config.checksum_check);
+        // Non-overridden fields still at defaults.
+        assert_eq!(
+            ctx.config.snapshot_keep,
+            crate::config::Config::default().snapshot_keep
+        );
+    }
+
+    /// Env overrides on top of a file config: both the file values and the
+    /// env overrides are reflected in ctx.config.
+    #[test]
+    fn env_overrides_layer_on_top_of_file_values() {
+        let f = temp_toml(
+            r#"database_path = "file.db"
+migrations_dir = "file/migrations""#,
+        );
+        let mut env = empty_env();
+        env.insert("STIG_DATABASE_PATH".into(), "env.db".into());
+
+        let ctx = RuntimeContext::build_with_env(Some(f.path().to_path_buf()), env).unwrap();
+
+        // Env beats file for database_path.
+        assert_eq!(ctx.config.database_path, "env.db");
+        // File value used for migrations_dir (no env override).
+        assert_eq!(ctx.config.migrations_dir, "file/migrations");
     }
 }
