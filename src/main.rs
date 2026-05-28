@@ -43,7 +43,7 @@ fn main() {
     };
 
     if let Err(e) = result {
-        let cli_err = CliError::Generic(e);
+        let cli_err = e.downcast::<CliError>().unwrap_or_else(CliError::Generic);
         eprintln!("{cli_err}");
         std::process::exit(cli_err.exit_code());
     }
