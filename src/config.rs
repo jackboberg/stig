@@ -13,7 +13,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::errors::CliError;
 
@@ -22,7 +22,7 @@ use crate::errors::CliError;
 // ---------------------------------------------------------------------------
 
 /// SQLite PRAGMAs applied on every connection open (`[pragmas]` table).
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Pragmas {
     /// `PRAGMA journal_mode`. Defaults to `"WAL"`.
     #[serde(default = "default_journal_mode")]
@@ -51,7 +51,7 @@ fn default_foreign_keys() -> String {
 }
 
 /// A single codegen target entry (`[[generate]]` array).
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct GenerateTarget {
     /// Target kind. Currently only `"typescript"` is supported.
     pub kind: String,
@@ -94,7 +94,7 @@ pub struct CliOverrides {
 // ---------------------------------------------------------------------------
 
 /// Resolved configuration for a `stig` invocation.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
 pub struct Config {
     /// The project root directory: the parent of the `stig.toml` file when
     /// one is found, or `start_dir` when supplied to [`Config::load`], or the
@@ -307,7 +307,7 @@ impl Config {
     /// 3. Upward search from `start_dir` (or CWD) for `stig.toml`
     ///
     /// Returns `None` if no config file is found (not an error).
-    fn resolve_config_path(
+    pub(crate) fn resolve_config_path(
         override_path: Option<&Path>,
         env: Option<&HashMap<String, String>>,
         start_dir: Option<&Path>,
@@ -391,6 +391,21 @@ impl Config {
         {
             self.checksum_check = false;
         }
+    }
+
+    /// Serialize `self` to TOML and write it to `path`.
+    ///
+    /// `project_root` is skipped by `#[serde(skip)]` and is never written.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CliError::Usage`] (exit 2) if serialization or the file write
+    /// fails.
+    pub fn write(&self, path: &Path) -> Result<(), CliError> {
+        let contents = toml::to_string_pretty(self)
+            .map_err(|e| CliError::Usage(format!("failed to serialize config: {e}")))?;
+        std::fs::write(path, contents)
+            .map_err(|e| CliError::Usage(format!("failed to write {}: {e}", path.display())))
     }
 }
 
@@ -843,5 +858,77 @@ mod tests {
             "load() must not read the real process env when an injected map is provided"
         );
         assert_eq!(cfg.database_path, Config::default().database_path);
+    }
+
+    // -----------------------------------------------------------------------
+    // Config::write round-trip tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn write_round_trips_default_config() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("stig.toml");
+
+        let original = Config {
+            project_root: dir.path().to_path_buf(),
+            ..Config::default()
+        };
+        original.write(&path).unwrap();
+
+        let loaded = Config::load(Some(&path), Some(&empty_env()), None).unwrap();
+        assert_eq!(loaded.database_path, original.database_path);
+        assert_eq!(loaded.migrations_dir, original.migrations_dir);
+        assert_eq!(loaded.backups_dir, original.backups_dir);
+        assert_eq!(loaded.snapshot_keep, original.snapshot_keep);
+        assert_eq!(loaded.reset_keep, original.reset_keep);
+        assert_eq!(loaded.auto_snapshot, original.auto_snapshot);
+        assert_eq!(loaded.checksum_check, original.checksum_check);
+        assert_eq!(loaded.pragmas, original.pragmas);
+        assert_eq!(loaded.generate, original.generate);
+    }
+
+    #[test]
+    fn write_round_trips_non_default_values() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("stig.toml");
+
+        let original = Config {
+            project_root: dir.path().to_path_buf(),
+            database_path: "prod.db".to_string(),
+            migrations_dir: "schema/migrations".to_string(),
+            snapshot_keep: 10,
+            auto_snapshot: false,
+            pragmas: Pragmas {
+                journal_mode: "DELETE".to_string(),
+                foreign_keys: "ON".to_string(),
+            },
+            ..Config::default()
+        };
+        original.write(&path).unwrap();
+
+        let loaded = Config::load(Some(&path), Some(&empty_env()), None).unwrap();
+        assert_eq!(loaded.database_path, "prod.db");
+        assert_eq!(loaded.migrations_dir, "schema/migrations");
+        assert_eq!(loaded.snapshot_keep, 10);
+        assert!(!loaded.auto_snapshot);
+        assert_eq!(loaded.pragmas.journal_mode, "DELETE");
+    }
+
+    #[test]
+    fn write_does_not_include_project_root() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("stig.toml");
+
+        let cfg = Config {
+            project_root: dir.path().to_path_buf(),
+            ..Config::default()
+        };
+        cfg.write(&path).unwrap();
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            !contents.contains("project_root"),
+            "project_root must not appear in written TOML"
+        );
     }
 }
