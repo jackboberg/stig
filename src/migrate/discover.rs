@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use tracing::warn;
 
 /// A parsed migration file found on disk.
@@ -34,7 +34,15 @@ pub fn discover(migrations_dir: &Path) -> Result<Vec<MigrationFile>> {
     let mut by_timestamp: HashMap<String, PathBuf> = HashMap::new();
     let mut migrations: Vec<MigrationFile> = Vec::new();
 
-    let mut entries: Vec<_> = migrations_dir.read_dir()?.filter_map(|e| e.ok()).collect();
+    let mut entries: Vec<_> = migrations_dir
+        .read_dir()?
+        .collect::<Result<Vec<_>, _>>()
+        .with_context(|| {
+            format!(
+                "failed to read migrations directory: {}",
+                migrations_dir.display()
+            )
+        })?;
 
     // Sort entries by filename for deterministic processing order.
     entries.sort_by_key(|e| e.file_name());
