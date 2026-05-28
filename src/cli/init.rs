@@ -56,9 +56,7 @@ fn current_dir() -> anyhow::Result<PathBuf> {
 /// Serialise `config` to `<project_root>/stig.toml`.
 fn write_config(config: &Config, project_root: &Path) -> anyhow::Result<()> {
     let toml_path = project_root.join("stig.toml");
-    config
-        .write(&toml_path)
-        .with_context(|| format!("failed to write {}", toml_path.display()))?;
+    config.write(&toml_path)?;
     println!("✓ wrote stig.toml");
     Ok(())
 }
