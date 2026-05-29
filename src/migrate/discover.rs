@@ -15,6 +15,27 @@ pub struct MigrationFile {
     pub path: PathBuf,
 }
 
+impl MigrationFile {
+    /// Return the version string as stored in `schema_migrations`: the
+    /// filename stem without the `.sql` suffix, i.e. `<timestamp>_<slug>`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use std::path::PathBuf;
+    /// # use stig::migrate::discover::MigrationFile;
+    /// let m = MigrationFile {
+    ///     timestamp: "20240528123045".to_string(),
+    ///     slug: "create_users".to_string(),
+    ///     path: PathBuf::from("db/migrations/20240528123045_create_users.sql"),
+    /// };
+    /// assert_eq!(m.version(), "20240528123045_create_users");
+    /// ```
+    pub fn version(&self) -> String {
+        format!("{}_{}", self.timestamp, self.slug)
+    }
+}
+
 /// Scan `migrations_dir` for `.sql` files, parse filenames of the form
 /// `<14-digit timestamp>_<slug>.sql`, and return them sorted lexicographically.
 ///
@@ -146,6 +167,30 @@ mod tests {
 
     fn touch(dir: &Path, name: &str) {
         fs::write(dir.join(name), "").expect("write");
+    }
+
+    // -------------------------------------------------------------------------
+    // MigrationFile::version tests
+    // -------------------------------------------------------------------------
+
+    #[test]
+    fn version_combines_timestamp_and_slug() {
+        let m = MigrationFile {
+            timestamp: "20240528123045".to_string(),
+            slug: "create_users".to_string(),
+            path: PathBuf::from("20240528123045_create_users.sql"),
+        };
+        assert_eq!(m.version(), "20240528123045_create_users");
+    }
+
+    #[test]
+    fn version_matches_filename_stem() {
+        let m = MigrationFile {
+            timestamp: "20260524103000".to_string(),
+            slug: "add_widgets".to_string(),
+            path: PathBuf::from("db/migrations/20260524103000_add_widgets.sql"),
+        };
+        assert_eq!(m.version(), "20260524103000_add_widgets");
     }
 
     // -------------------------------------------------------------------------
