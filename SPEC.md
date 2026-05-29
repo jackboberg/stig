@@ -548,7 +548,7 @@ stig/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs                  # clap entrypoint, dispatches to commands
-│   ├── lib.rs
+│   ├── lib.rs                   # pub(crate) sha256_hex utility + module declarations
 │   ├── cli/
 │   │   ├── mod.rs
 │   │   ├── init.rs
@@ -567,7 +567,6 @@ stig/
 │   │   ├── plan.rs              # diff applied vs on-disk, detect drift
 │   │   └── apply.rs             # snapshot + execute + record
 │   ├── snapshot.rs              # copy/restore/prune (snapshots + resets)
-│   ├── checksum.rs              # sha256 helpers
 │   ├── codegen/
 │   │   ├── mod.rs               # trait + dispatcher
 │   │   └── typescript.rs        # built-in target
@@ -633,7 +632,7 @@ A single `enum CliError` carries an exit code per variant. The `main` function c
 
 ### 9.1 Unit tests
 
-- `checksum.rs`: known-input/known-output SHA-256 vectors.
+- `lib.rs`: single NIST known-vector smoke test for `sha256_hex` — confirms `sha2`+`hex` wiring, not the algorithm itself.
 - `migrate/discover.rs`: filename parsing, including malformed timestamps and slugs.
 - `migrate/plan.rs`: diff logic — fully applied, partial, with drift, with missing files (applied-but-not-on-disk).
 - `config.rs`: precedence (CLI > env > TOML > default).

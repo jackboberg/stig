@@ -7,7 +7,13 @@ hooks {
     stash = "git"
     steps {
       ["cargo-fmt"] = Builtins.cargo_fmt
-      ["cargo-clippy"] = Builtins.cargo_clippy
+      // Override the builtin: add --all-targets so test code is linted (matching
+      // CI), and add -D warnings so unfixable lints fail the commit rather than
+      // being silently skipped.
+      ["cargo-clippy"] = (Builtins.cargo_clippy) {
+        check = "cargo clippy --manifest-path Cargo.toml --all-targets --quiet -- -D warnings"
+        fix   = "cargo clippy --manifest-path Cargo.toml --all-targets --fix --allow-dirty --allow-staged --quiet"
+      }
     }
   }
   ["commit-msg"] {
