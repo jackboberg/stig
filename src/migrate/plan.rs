@@ -430,7 +430,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let file = write_migration(&dir, "20240101000000", "alpha", "SELECT 1;");
 
-        let plan = Plan::build(&[file.clone()], &conn).unwrap();
+        let plan = Plan::build(std::slice::from_ref(&file), &conn).unwrap();
 
         assert_eq!(plan.entries[0].file.as_ref().unwrap().path, file.path);
     }
