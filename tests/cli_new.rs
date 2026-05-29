@@ -117,38 +117,15 @@ fn new_whitespace_only_description_exits_2() {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Collision: pre-existing file with same timestamp exits 2
-//    (unit-tested in new.rs; this confirms the error surfaces correctly via CLI)
+// 4. Punctuation-only description (no alphanumeric chars) exits 2
+//    The collision path is exercised by the unit test build_path_errors_on_collision
+//    in src/cli/new.rs; no integration-level collision test is needed.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn new_collision_exits_2() {
+fn new_punctuation_only_description_exits_2() {
     let dir = TempDir::new().unwrap();
     init(&dir);
-
-    // Run `new` once to get a file with a real timestamp.
-    stig_cmd(&dir)
-        .args(["new", "add_widgets", "--no-edit"])
-        .assert()
-        .success();
-
-    // Find the file that was just created and note its timestamp prefix.
-    let migrations = dir.path().join("db/migrations");
-    let entries: Vec<_> = std::fs::read_dir(&migrations)
-        .unwrap()
-        .filter_map(|e| e.ok())
-        .collect();
-    assert_eq!(entries.len(), 1);
-    let existing_name = entries[0].file_name();
-    let ts_prefix = &existing_name.to_str().unwrap()[..14];
-
-    // Pre-create a second file for the *next* second's timestamp so we can
-    // provoke a collision deterministically via build_path logic. Since we
-    // can't freeze time in a subprocess, we instead verify the collision path
-    // via the unit tests in src/cli/new.rs (build_path_errors_on_collision).
-    // This integration test verifies that a punctuation-only description
-    // surfaces exit code 2 at the CLI boundary.
-    let _ = ts_prefix; // used above for documentation purposes
 
     stig_cmd(&dir)
         .args(["new", "!!!", "--no-edit"])

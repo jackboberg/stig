@@ -3,10 +3,13 @@
 //! Creates a new migration file in the configured migrations directory:
 //! - Slugifies the description per §3.2.
 //! - Generates a UTC timestamp filename `<yyyyMMddHHmmss>_<slug>.sql`.
-//! - Errors (exit 2) if a file with the same timestamp already exists.
-//! - Writes the standard migration template.
+//! - Errors (exit 2) if a file with the same timestamp already exists
+//!   (same-second collision is treated as a hard error for MVP; wait a
+//!   second and retry).
+//! - Writes the standard migration template atomically via `create_new`.
 //! - Opens `$EDITOR` unless `--no-edit` is passed or `$EDITOR` is unset.
 
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
@@ -20,7 +23,7 @@ pub fn run(description: String, no_edit: bool) -> anyhow::Result<()> {
     let config = Config::load(None, None, None)?;
     let migrations_dir = config.project_root.join(&config.migrations_dir);
 
-    if !migrations_dir.exists() {
+    if !migrations_dir.is_dir() {
         return Err(CliError::Usage(
             "migrations directory not found — run `stig init` first".into(),
         )
@@ -45,10 +48,16 @@ pub fn run(description: String, no_edit: bool) -> anyhow::Result<()> {
         && !editor.is_empty()
     {
         println!("  opening in {} ...", editor);
-        std::process::Command::new(&editor)
+        let status = std::process::Command::new(&editor)
             .arg(&path)
             .status()
             .with_context(|| format!("failed to launch editor `{editor}`"))?;
+        if !status.success() {
+            return Err(CliError::Generic(anyhow::anyhow!(
+                "editor `{editor}` exited with status {status}"
+            ))
+            .into());
+        }
     }
 
     Ok(())
@@ -124,6 +133,10 @@ pub fn build_path(migrations_dir: &Path, slug: &str, ts: DateTime<Utc>) -> anyho
 }
 
 /// Write the standard migration template to `path`.
+///
+/// Uses `create_new` so the operation is atomic — it will fail if the file
+/// already exists, providing a last-line-of-defence against clobbering an
+/// existing migration even if the collision check in `build_path` races.
 fn write_template(path: &Path, description: &str, ts: DateTime<Utc>) -> anyhow::Result<()> {
     let created = ts.to_rfc3339();
     let content = format!(
@@ -137,7 +150,12 @@ fn write_template(path: &Path, description: &str, ts: DateTime<Utc>) -> anyhow::
          \n\
          \n"
     );
-    std::fs::write(path, content)
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+        .with_context(|| format!("failed to create migration file {}", path.display()))?;
+    file.write_all(content.as_bytes())
         .with_context(|| format!("failed to write migration file {}", path.display()))?;
     Ok(())
 }

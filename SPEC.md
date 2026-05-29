@@ -147,7 +147,7 @@ Exit codes: 0 ok, 2 if a config exists and `--force` was not passed.
 Scaffolds a new migration file and opens it in `$EDITOR` (skipped with `--no-edit`).
 
 - Description is sluggified: lowercased, non-alphanumeric characters collapsed to `_`, leading/trailing underscores stripped, capped at 60 chars.
-- Filename: `<UTC timestamp yyyyMMddHHmmss>_<slug>.sql`. The timestamp is generated at invocation time; if a file with the same timestamp exists (unlikely but possible in scripts), increments by one second until unique.
+- Filename: `<UTC timestamp yyyyMMddHHmmss>_<slug>.sql`. The timestamp is generated at invocation time; if a file with the same timestamp already exists, exits 2 with an error message (wait a second and retry).
 - Initial contents:
 
   ```sql
@@ -768,7 +768,7 @@ Each issue below is sized to ship as a single PR. Issues are listed in suggested
 **Acceptance.**
 - Integration test: `new "Add Widgets!!!"` produces `<ts>_add_widgets.sql` with the expected template.
 - Empty/whitespace-only description exits 2.
-- Same-timestamp collision increments by one second until unique.
+- Same-timestamp collision exits 2 (wait a second and retry).
 - `--no-edit` skips `$EDITOR`.
 
 **Prerequisites.** Issues 2, 5.
