@@ -58,7 +58,7 @@ pub fn run(description: String, no_edit: bool) -> anyhow::Result<()> {
             .with_context(|| format!("failed to launch editor `{editor}`"))?;
         if !status.success() {
             return Err(CliError::Generic(anyhow::anyhow!(
-                "editor `{editor}` exited with status {status}"
+                "editor `{editor}` exited with {status}"
             ))
             .into());
         }
