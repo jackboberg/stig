@@ -54,8 +54,8 @@ pub struct PlannedMigration {
 #[derive(Debug)]
 pub struct Plan {
     /// All known migrations, sorted by version (lexicographic).
-    /// On-disk files appear first in their sorted order; orphan DB rows are
-    /// appended at the end, also sorted.
+    /// [`Plan::build`] enforces this ordering — callers do not need to
+    /// pre-sort the input files.
     pub entries: Vec<PlannedMigration>,
 }
 
@@ -87,7 +87,7 @@ impl Plan {
                         format!("failed to read migration file: {}", file.path.display())
                     })?;
                     let current_checksum = sha256_hex(&bytes);
-                    let drifted = current_checksum != *stored_checksum;
+                    let drifted = current_checksum.as_str() != stored_checksum.as_str();
                     MigrationStatus::Applied {
                         checksum: stored_checksum.clone(),
                         drifted,
@@ -123,6 +123,10 @@ impl Plan {
                 },
             });
         }
+
+        // Sort all entries by version to guarantee deterministic ordering
+        // regardless of the order files were provided or orphans were iterated.
+        entries.sort_by(|a, b| a.version.cmp(&b.version));
 
         Ok(Self { entries })
     }
