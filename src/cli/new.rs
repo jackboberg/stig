@@ -48,12 +48,11 @@ pub fn run(description: String, no_edit: bool) -> anyhow::Result<()> {
         && !editor.is_empty()
     {
         println!("  opening in {} ...", editor);
-        // Split EDITOR into program + args to support values like "code -w".
-        let mut parts = editor.split_whitespace();
-        let program = parts.next().unwrap();
-        let args: Vec<&str> = parts.collect();
-        let status = std::process::Command::new(program)
-            .args(&args)
+        // Treat EDITOR as a program path only. Argument-bearing values like
+        // `EDITOR="code -w"` cannot be split reliably without a shell-word
+        // parser; per POSIX convention EDITOR should be a bare executable
+        // path. Users who need flags should wrap the editor in a script.
+        let status = std::process::Command::new(&editor)
             .arg(&path)
             .status()
             .with_context(|| format!("failed to launch editor `{editor}`"))?;
@@ -126,28 +125,32 @@ pub fn slugify(description: &str) -> anyhow::Result<String> {
 pub fn build_path(migrations_dir: &Path, slug: &str, ts: DateTime<Utc>) -> anyhow::Result<PathBuf> {
     let ts_str = ts.format("%Y%m%d%H%M%S").to_string();
 
-    // Scan the directory for any existing file whose name starts with the
-    // timestamp prefix, regardless of slug.
-    let collision = std::fs::read_dir(migrations_dir)
-        .with_context(|| {
+    // Scan the directory for any existing file whose name starts with
+    // "{ts_str}_" (the canonical migration prefix), regardless of slug.
+    // Propagate per-entry I/O errors so an unreadable entry never causes a
+    // silent miss that could later produce a duplicate-timestamp error in
+    // `stig migrate`.
+    let prefix = format!("{ts_str}_");
+    for entry in std::fs::read_dir(migrations_dir).with_context(|| {
+        format!(
+            "failed to read migrations directory {}",
+            migrations_dir.display()
+        )
+    })? {
+        let entry = entry.with_context(|| {
             format!(
-                "failed to read migrations directory {}",
+                "failed to read entry in migrations directory {}",
                 migrations_dir.display()
             )
-        })?
-        .filter_map(|e| e.ok())
-        .any(|e| {
-            e.file_name()
-                .to_str()
-                .map(|n| n.starts_with(&ts_str) && n.ends_with(".sql"))
-                .unwrap_or(false)
-        });
-
-    if collision {
-        return Err(CliError::Usage(format!(
-            "a migration with timestamp {ts_str} already exists — wait a second and retry"
-        ))
-        .into());
+        })?;
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(&prefix) && name.ends_with(".sql") {
+            return Err(CliError::Usage(format!(
+                "a migration with timestamp {ts_str} already exists — wait a second and retry"
+            ))
+            .into());
+        }
     }
 
     let filename = format!("{ts_str}_{slug}.sql");
@@ -156,11 +159,11 @@ pub fn build_path(migrations_dir: &Path, slug: &str, ts: DateTime<Utc>) -> anyho
 
 /// Write the standard migration template to `path`.
 ///
-/// Uses `create_new` so the operation is atomic — it will fail if the file
-/// already exists, providing a last-line-of-defence against clobbering an
-/// existing migration even if the collision check in `build_path` races.
-/// `AlreadyExists` is surfaced as a `CliError::Usage` (exit 2) to match the
-/// CLI contract for timestamp collisions.
+/// Uses `create_new` so the file open is atomic — it will fail if the *exact*
+/// target path already exists (TOCTOU guard for the same slug/same second).
+/// Note: a different slug at the same timestamp would produce a distinct path
+/// and would not be caught here; that case is prevented earlier by
+/// `build_path`. `AlreadyExists` is surfaced as a `CliError::Usage` (exit 2).
 fn write_template(path: &Path, description: &str, ts: DateTime<Utc>) -> anyhow::Result<()> {
     let created = ts.to_rfc3339();
     let content = format!(
