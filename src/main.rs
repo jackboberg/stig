@@ -13,7 +13,13 @@ enum Command {
     /// Initialize a new stig project in the current directory.
     Init,
     /// Create a new migration file.
-    New,
+    New {
+        /// Description for the new migration (will be slugified)
+        description: String,
+        /// Skip opening $EDITOR after creating the file
+        #[arg(long)]
+        no_edit: bool,
+    },
     /// Apply pending migrations.
     Migrate,
     /// Show migration status.
@@ -33,7 +39,10 @@ fn main() {
 
     let result: Result<(), anyhow::Error> = match cli.command {
         Command::Init => stig::cli::init::run(),
-        Command::New => stig::cli::new::run(),
+        Command::New {
+            description,
+            no_edit,
+        } => stig::cli::new::run(description, no_edit),
         Command::Migrate => stig::cli::migrate::run(),
         Command::Status => stig::cli::status::run(),
         Command::Redo => stig::cli::redo::run(),
