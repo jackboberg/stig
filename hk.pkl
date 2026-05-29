@@ -7,7 +7,10 @@ hooks {
     stash = "git"
     steps {
       ["cargo-fmt"] = Builtins.cargo_fmt
-      ["cargo-clippy"] = Builtins.cargo_clippy
+      ["cargo-clippy"] = (Builtins.cargo_clippy) {
+        check = "cargo clippy --manifest-path Cargo.toml --all-targets --quiet -- -D warnings"
+        fix   = "cargo clippy --manifest-path Cargo.toml --all-targets --fix --allow-dirty --allow-staged --quiet"
+      }
     }
   }
   ["commit-msg"] {
