@@ -4,7 +4,7 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-/// Known `STIG_*` env vars that could leak from the developer's shell.
+/// Env vars that could leak from the developer's shell into integration tests.
 const STIG_ENV_KEYS: &[&str] = &[
     "STIG_CONFIG",
     "STIG_DATABASE_PATH",

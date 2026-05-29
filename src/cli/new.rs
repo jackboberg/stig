@@ -75,7 +75,7 @@ pub fn run(description: String, no_edit: bool) -> anyhow::Result<()> {
 /// - Strip leading/trailing underscores
 /// - Truncate to 60 characters
 /// - Return `Err(CliError::Usage)` if the result is empty
-pub fn slugify(description: &str) -> anyhow::Result<String> {
+pub(super) fn slugify(description: &str) -> anyhow::Result<String> {
     let lower = description.to_lowercase();
 
     // Replace non-alphanumeric with '_'
@@ -122,7 +122,11 @@ pub fn slugify(description: &str) -> anyhow::Result<String> {
 /// Returns `Err(CliError::Usage)` if *any* file with the same timestamp
 /// already exists in the migrations directory, regardless of slug — matching
 /// how `stig migrate` treats duplicate timestamps as a hard error.
-pub fn build_path(migrations_dir: &Path, slug: &str, ts: DateTime<Utc>) -> anyhow::Result<PathBuf> {
+pub(super) fn build_path(
+    migrations_dir: &Path,
+    slug: &str,
+    ts: DateTime<Utc>,
+) -> anyhow::Result<PathBuf> {
     let ts_str = ts.format("%Y%m%d%H%M%S").to_string();
 
     // Scan the directory for any existing file whose name starts with

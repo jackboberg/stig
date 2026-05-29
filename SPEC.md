@@ -168,7 +168,7 @@ $ stig new add_widgets
   opening in $EDITOR ...
 ```
 
-Exit codes: 0 ok, 2 if description is empty after slugification.
+Exit codes: 0 ok, 2 if description is empty after slugification, timestamp collision, or migrations directory not found.
 
 ### 3.3 `migrate`
 
