@@ -147,6 +147,17 @@ pub(super) fn build_path(
                 migrations_dir.display()
             )
         })?;
+        // Only regular files can be migrations; skip directories and other
+        // non-file entries so they don't cause spurious collision errors.
+        let file_type = entry.file_type().with_context(|| {
+            format!(
+                "failed to read file type for entry in {}",
+                migrations_dir.display()
+            )
+        })?;
+        if !file_type.is_file() {
+            continue;
+        }
         let name = entry.file_name();
         let name = name.to_string_lossy();
         if name.starts_with(&prefix) && name.ends_with(".sql") {
@@ -295,6 +306,20 @@ mod tests {
         std::fs::write(dir.path().join("20260529103000_other_migration.sql"), "").unwrap();
         let err = build_path(dir.path(), "add_widgets", ts).unwrap_err();
         assert!(err.to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn build_path_ignores_subdirectory_with_matching_name() {
+        let dir = TempDir::new().unwrap();
+        let ts = "2026-05-29T10:30:00Z".parse::<DateTime<Utc>>().unwrap();
+        // A subdirectory whose name matches the collision pattern must not
+        // be treated as a migration file (mirrors discover()'s is_file check).
+        std::fs::create_dir(dir.path().join("20260529103000_add_widgets.sql")).unwrap();
+        let path = build_path(dir.path(), "add_widgets", ts).unwrap();
+        assert_eq!(
+            path.file_name().unwrap().to_str().unwrap(),
+            "20260529103000_add_widgets.sql"
+        );
     }
 
     #[test]
