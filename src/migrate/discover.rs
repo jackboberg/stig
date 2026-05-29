@@ -223,8 +223,11 @@ mod tests {
 
     #[test]
     fn discover_missing_dir_returns_error() {
-        let dir = Path::new("/tmp/stig_nonexistent_dir_xyzzy");
-        assert!(discover(dir).is_err());
+        let tmp = make_dir();
+        // Use a child path that was never created — guaranteed absent for the
+        // lifetime of the TempDir.
+        let missing = tmp.path().join("nonexistent_subdir");
+        assert!(discover(&missing).is_err());
     }
 
     #[test]
