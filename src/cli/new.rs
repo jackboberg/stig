@@ -48,7 +48,12 @@ pub fn run(description: String, no_edit: bool) -> anyhow::Result<()> {
         && !editor.is_empty()
     {
         println!("  opening in {} ...", editor);
-        let status = std::process::Command::new(&editor)
+        // Split EDITOR into program + args to support values like "code -w".
+        let mut parts = editor.split_whitespace();
+        let program = parts.next().unwrap();
+        let args: Vec<&str> = parts.collect();
+        let status = std::process::Command::new(program)
+            .args(&args)
             .arg(&path)
             .status()
             .with_context(|| format!("failed to launch editor `{editor}`"))?;
@@ -115,21 +120,38 @@ pub fn slugify(description: &str) -> anyhow::Result<String> {
 
 /// Compute the target file path for a new migration.
 ///
-/// Returns `Err(CliError::Usage)` if a file with the same timestamp already
-/// exists (indicates a real collision, not just a retry situation).
+/// Returns `Err(CliError::Usage)` if *any* file with the same timestamp
+/// already exists in the migrations directory, regardless of slug — matching
+/// how `stig migrate` treats duplicate timestamps as a hard error.
 pub fn build_path(migrations_dir: &Path, slug: &str, ts: DateTime<Utc>) -> anyhow::Result<PathBuf> {
     let ts_str = ts.format("%Y%m%d%H%M%S").to_string();
-    let filename = format!("{ts_str}_{slug}.sql");
-    let path = migrations_dir.join(&filename);
 
-    if path.exists() {
+    // Scan the directory for any existing file whose name starts with the
+    // timestamp prefix, regardless of slug.
+    let collision = std::fs::read_dir(migrations_dir)
+        .with_context(|| {
+            format!(
+                "failed to read migrations directory {}",
+                migrations_dir.display()
+            )
+        })?
+        .filter_map(|e| e.ok())
+        .any(|e| {
+            e.file_name()
+                .to_str()
+                .map(|n| n.starts_with(&ts_str) && n.ends_with(".sql"))
+                .unwrap_or(false)
+        });
+
+    if collision {
         return Err(CliError::Usage(format!(
             "a migration with timestamp {ts_str} already exists — wait a second and retry"
         ))
         .into());
     }
 
-    Ok(path)
+    let filename = format!("{ts_str}_{slug}.sql");
+    Ok(migrations_dir.join(filename))
 }
 
 /// Write the standard migration template to `path`.
@@ -137,6 +159,8 @@ pub fn build_path(migrations_dir: &Path, slug: &str, ts: DateTime<Utc>) -> anyho
 /// Uses `create_new` so the operation is atomic — it will fail if the file
 /// already exists, providing a last-line-of-defence against clobbering an
 /// existing migration even if the collision check in `build_path` races.
+/// `AlreadyExists` is surfaced as a `CliError::Usage` (exit 2) to match the
+/// CLI contract for timestamp collisions.
 fn write_template(path: &Path, description: &str, ts: DateTime<Utc>) -> anyhow::Result<()> {
     let created = ts.to_rfc3339();
     let content = format!(
@@ -154,7 +178,19 @@ fn write_template(path: &Path, description: &str, ts: DateTime<Utc>) -> anyhow::
         .write(true)
         .create_new(true)
         .open(path)
-        .with_context(|| format!("failed to create migration file {}", path.display()))?;
+        .map_err(|e| {
+            if e.kind() == std::io::ErrorKind::AlreadyExists {
+                anyhow::Error::from(CliError::Usage(format!(
+                    "a migration file already exists at {} — wait a second and retry",
+                    path.display()
+                )))
+            } else {
+                anyhow::Error::from(e).context(format!(
+                    "failed to create migration file {}",
+                    path.display()
+                ))
+            }
+        })?;
     file.write_all(content.as_bytes())
         .with_context(|| format!("failed to write migration file {}", path.display()))?;
     Ok(())
@@ -235,16 +271,37 @@ mod tests {
     }
 
     #[test]
-    fn build_path_errors_on_collision() {
+    fn build_path_errors_on_collision_same_slug() {
         let dir = TempDir::new().unwrap();
         let ts = "2026-05-29T10:30:00Z".parse::<DateTime<Utc>>().unwrap();
-        // Pre-create the file to simulate a collision.
+        // Same timestamp, same slug.
         std::fs::write(dir.path().join("20260529103000_add_widgets.sql"), "").unwrap();
         let err = build_path(dir.path(), "add_widgets", ts).unwrap_err();
         assert!(err.to_string().contains("already exists"));
     }
 
-    // ── write_template ───────────────────────────────────────────────────────
+    #[test]
+    fn build_path_errors_on_collision_different_slug() {
+        let dir = TempDir::new().unwrap();
+        let ts = "2026-05-29T10:30:00Z".parse::<DateTime<Utc>>().unwrap();
+        // Same timestamp, different slug — must still be a collision.
+        std::fs::write(dir.path().join("20260529103000_other_migration.sql"), "").unwrap();
+        let err = build_path(dir.path(), "add_widgets", ts).unwrap_err();
+        assert!(err.to_string().contains("already exists"));
+    }
+
+    #[test]
+    fn write_template_already_exists_is_usage_error() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("test.sql");
+        let ts = "2026-05-29T10:30:00Z".parse::<DateTime<Utc>>().unwrap();
+        // Pre-create the file.
+        std::fs::write(&path, "existing content").unwrap();
+        let err = write_template(&path, "desc", ts).unwrap_err();
+        // Must downcast to CliError::Usage (exit 2).
+        let cli_err = err.downcast::<CliError>().expect("should be CliError");
+        assert!(matches!(cli_err, CliError::Usage(_)));
+    }
 
     #[test]
     fn write_template_contains_expected_lines() {
