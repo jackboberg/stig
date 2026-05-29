@@ -157,11 +157,22 @@ pub fn prune_snapshots(snapshots_dir: &Path, keep: u32) -> Result<()> {
 ///
 /// Returns the path of the created reset backup (the `.db` file).
 ///
+/// Returns an error if a reset backup with the same timestamp already exists
+/// (collision within one second); the caller should retry.
+///
 /// On partial failure all destination files are removed and the source files
 /// are restored before the error is returned.
 pub fn take_reset_backup(db_path: &Path, resets_dir: &Path) -> Result<PathBuf> {
     let ts = Utc::now().format("%Y%m%dT%H%M%SZ");
     let dest_base = resets_dir.join(format!("reset-{ts}.db"));
+
+    if dest_base.exists() {
+        anyhow::bail!(
+            "reset backup already exists: {}; wait a second and retry",
+            dest_base.display()
+        );
+    }
+
     let mut moved: Vec<(PathBuf, PathBuf)> = Vec::new(); // (src, dst)
 
     let result = (|| -> Result<()> {
@@ -449,18 +460,40 @@ mod tests {
     }
 
     #[test]
-    fn restore_snapshot_leaves_live_db_intact_on_failure() {
-        // Simulate a restore failure by making the destination unwritable.
-        // We test this by verifying the live DB is unchanged when the snapshot
-        // is absent (already covered above), which exercises the same rollback
-        // path without platform-specific permission tricks.
+    #[cfg(unix)]
+    fn restore_snapshot_rolls_back_live_db_on_copy_failure() {
+        // Trigger the rollback path: live DB is moved aside successfully, but
+        // the copy of the snapshot .db file fails because we've made it
+        // unreadable (mode 0o000).  After the error the live DB must be
+        // restored to its original content.
+        use std::os::unix::fs::PermissionsExt;
+
         let dir = TempDir::new().unwrap();
         let db = write_file(dir.path(), "app.db", b"safe");
         let snaps = dir.path().join("snapshots");
         std::fs::create_dir(&snaps).unwrap();
 
-        let _ = restore_snapshot("20240101000000_absent", &db, &snaps);
+        take_snapshot("20240101000000_v", &db, &snaps).unwrap();
 
+        // Make the snapshot .db unreadable so copy_file fails after
+        // move_to_temp has already moved the live DB aside.
+        let snap_db = snaps.join("pre-20240101000000_v.db");
+        let mut perms = std::fs::metadata(&snap_db).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&snap_db, perms).unwrap();
+
+        let result = restore_snapshot("20240101000000_v", &db, &snaps);
+
+        // Restore permissions so TempDir cleanup can delete the file.
+        let mut perms = std::fs::metadata(&snap_db).unwrap().permissions();
+        perms.set_mode(0o644);
+        std::fs::set_permissions(&snap_db, perms).unwrap();
+
+        assert!(
+            result.is_err(),
+            "expected an error due to unreadable snapshot"
+        );
+        // The live DB must be restored to its original content.
         assert_file_content(&db, b"safe");
     }
 
@@ -633,6 +666,52 @@ mod tests {
         // Name should be reset-<14+ char timestamp>Z.db
         assert!(name.starts_with("reset-"));
         assert!(name.ends_with("Z.db"));
+    }
+
+    #[test]
+    fn take_reset_backup_errors_on_timestamp_collision() {
+        let dir = TempDir::new().unwrap();
+        let resets = dir.path().join("resets");
+        std::fs::create_dir(&resets).unwrap();
+
+        // Pre-create a file that matches the current-second timestamp pattern
+        // by calling take_reset_backup once, then immediately calling it again
+        // with a fresh source file.  Because the second call happens within the
+        // same second, the destination already exists and must be rejected.
+        let db1 = write_file(dir.path(), "app1.db", b"first");
+        let first_result = take_reset_backup(&db1, &resets).unwrap();
+
+        // Synthesise a collision: write a fresh source and pre-create the
+        // *exact same destination name* that the next call would produce.
+        let db2 = write_file(dir.path(), "app2.db", b"second");
+        // Copy the first result file to a temp location, then rename it back
+        // to simulate a same-second collision without actually needing to be
+        // that fast.
+        std::fs::copy(
+            &first_result,
+            resets.join(first_result.file_name().unwrap()),
+        )
+        .ok();
+
+        // Directly pre-create the destination that take_reset_backup would
+        // choose by writing a zero-byte sentinel at that path.
+        let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
+        let collision_path = resets.join(format!("reset-{ts}.db"));
+        write_file(
+            &resets,
+            collision_path.file_name().unwrap().to_str().unwrap(),
+            b"",
+        );
+
+        let result = take_reset_backup(&db2, &resets);
+        assert!(result.is_err(), "expected error on timestamp collision");
+        let msg = format!("{:?}", result.unwrap_err());
+        assert!(
+            msg.contains("already exists"),
+            "error should mention collision: {msg}"
+        );
+        // Source DB must be untouched.
+        assert_file_content(&db2, b"second");
     }
 
     // -----------------------------------------------------------------------
