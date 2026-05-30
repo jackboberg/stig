@@ -19,8 +19,6 @@
 //! higher-level commands are responsible for checking [`Db::is_memory`] and
 //! declining to proceed.
 
-use std::path::{Path, PathBuf};
-
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 use tracing::warn;
@@ -51,16 +49,7 @@ impl Db {
         let raw = &config.database_path;
         let is_memory = raw == ":memory:";
 
-        // Resolve relative paths against project_root so the correct database
-        // is opened when the CLI is invoked from a subdirectory of the project.
-        // Absolute paths and the special ":memory:" token are used as-is.
-        // We keep the resolved value as a PathBuf so non-UTF-8 paths on Unix
-        // are handled correctly — rusqlite::Connection::open accepts AsRef<Path>.
-        let resolved: PathBuf = if is_memory || Path::new(raw).is_absolute() {
-            PathBuf::from(raw)
-        } else {
-            config.project_root.join(raw)
-        };
+        let resolved = config.resolve_path(raw);
 
         let conn = if is_memory {
             warn!(

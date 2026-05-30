@@ -21,7 +21,11 @@ enum Command {
         no_edit: bool,
     },
     /// Apply pending migrations.
-    Migrate,
+    Migrate {
+        /// Preview what would be applied without mutating state.
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Show migration status.
     Status,
     /// Roll back the last migration and re-apply it.
@@ -43,7 +47,7 @@ fn main() {
             description,
             no_edit,
         } => stig::cli::new::run(description, no_edit),
-        Command::Migrate => stig::cli::migrate::run(),
+        Command::Migrate { dry_run } => stig::cli::migrate::run(dry_run),
         Command::Status => stig::cli::status::run(),
         Command::Redo => stig::cli::redo::run(),
         Command::Reset => stig::cli::reset::run(),

@@ -297,6 +297,18 @@ impl Config {
         }
     }
 
+    /// Resolve a relative config path against `project_root`.
+    ///
+    /// Absolute paths and the special token `":memory:"` are returned as-is.
+    /// Relative paths are joined to `project_root`.
+    pub fn resolve_path(&self, path: &str) -> PathBuf {
+        if path == ":memory:" || Path::new(path).is_absolute() {
+            PathBuf::from(path)
+        } else {
+            self.project_root.join(path)
+        }
+    }
+
     // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
