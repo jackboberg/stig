@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use rusqlite::params;
+use tracing::warn;
 
 use crate::config::Config;
 use crate::db::Db;
@@ -149,6 +150,21 @@ pub fn strip_directive(content: &str) -> String {
     result
 }
 
+/// Check whether `sql` contains explicit transaction statements
+/// (`BEGIN` or `COMMIT`).
+///
+/// This is used to warn when a non-transactional migration contains
+/// explicit transaction control, which is likely a mistake.
+fn has_explicit_transaction(sql: &str) -> bool {
+    for line in sql.lines() {
+        let trimmed = line.trim().to_uppercase();
+        if trimmed.starts_with("BEGIN") || trimmed.starts_with("COMMIT") {
+            return true;
+        }
+    }
+    false
+}
+
 /// Apply all pending migrations from `plan` against `db`.
 ///
 /// For each pending migration:
@@ -200,6 +216,12 @@ pub fn apply_pending(db: &Db, plan: &Plan, config: &Config, dry_run: bool) -> Re
 
         if is_non_tx {
             let sql = strip_directive(&content);
+            if has_explicit_transaction(&sql) {
+                warn!(
+                    migration = %filename,
+                    "non-transactional migration contains explicit BEGIN/COMMIT statements"
+                );
+            }
             db.connection()
                 .execute_batch(&sql)
                 .with_context(|| format!("failed to execute {filename} ({version})"))?;
@@ -215,7 +237,9 @@ pub fn apply_pending(db: &Db, plan: &Plan, config: &Config, dry_run: bool) -> Re
                 "INSERT INTO schema_migrations (version, checksum) VALUES (?1, ?2)",
                 params![version, checksum],
             )
-            .with_context(|| format!("failed to record {filename} ({version}) in schema_migrations"))?;
+            .with_context(|| {
+                format!("failed to record {filename} ({version}) in schema_migrations")
+            })?;
 
         n_applied += 1;
 
@@ -465,5 +489,39 @@ mod tests {
             strip_directive(input),
             "/* stig: non-transactional\nSELECT 1;\n"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // has_explicit_transaction tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn has_explicit_transaction_detects_begin() {
+        assert!(has_explicit_transaction("BEGIN;\nSELECT 1;\nCOMMIT;"));
+    }
+
+    #[test]
+    fn has_explicit_transaction_detects_commit() {
+        assert!(has_explicit_transaction("SELECT 1;\nCOMMIT;"));
+    }
+
+    #[test]
+    fn has_explicit_transaction_case_insensitive() {
+        assert!(has_explicit_transaction("begin;\nSELECT 1;\ncommit;"));
+    }
+
+    #[test]
+    fn has_explicit_transaction_with_whitespace() {
+        assert!(has_explicit_transaction("  BEGIN TRANSACTION;\nSELECT 1;"));
+    }
+
+    #[test]
+    fn has_explicit_transaction_returns_false_for_plain_sql() {
+        assert!(!has_explicit_transaction("SELECT 1;\nVACUUM;"));
+    }
+
+    #[test]
+    fn has_explicit_transaction_returns_false_for_empty() {
+        assert!(!has_explicit_transaction(""));
     }
 }
