@@ -1,19 +1,12 @@
 //! Integration tests for `stig new`.
 
+mod common;
+
 use assert_cmd::Command;
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-/// Env vars that could leak from the developer's shell into integration tests.
-const STIG_ENV_KEYS: &[&str] = &[
-    "STIG_CONFIG",
-    "STIG_DATABASE_PATH",
-    "DATABASE_PATH",
-    "STIG_MIGRATIONS_DIR",
-    "STIG_BACKUPS_DIR",
-    "STIG_NO_SNAPSHOT",
-    "STIG_NO_CHECKSUM",
-];
+use common::STIG_ENV_KEYS;
 
 /// Return a `stig` [`Command`] with CWD set to `dir`, all known `STIG_*` env
 /// vars removed, and `EDITOR` unset so no real editor is launched.

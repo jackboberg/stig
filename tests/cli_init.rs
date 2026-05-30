@@ -1,32 +1,12 @@
 //! Integration tests for `stig init`.
 
-use assert_cmd::Command;
+mod common;
+
 use predicates::prelude::*;
 use rusqlite::Connection;
 use tempfile::TempDir;
 
-/// Known `STIG_*` env vars that could leak from the developer's shell and
-/// corrupt test assertions. Cleared on every subprocess.
-const STIG_ENV_KEYS: &[&str] = &[
-    "STIG_CONFIG",
-    "STIG_DATABASE_PATH",
-    "DATABASE_PATH",
-    "STIG_MIGRATIONS_DIR",
-    "STIG_BACKUPS_DIR",
-    "STIG_NO_SNAPSHOT",
-    "STIG_NO_CHECKSUM",
-];
-
-/// Return a `stig` [`Command`] with CWD set to `dir` and all known `STIG_*`
-/// env vars removed so ambient shell variables cannot affect assertions.
-fn stig_cmd(dir: &TempDir) -> Command {
-    let mut cmd = Command::cargo_bin("stig").unwrap();
-    cmd.current_dir(dir.path());
-    for key in STIG_ENV_KEYS {
-        cmd.env_remove(key);
-    }
-    cmd
-}
+use common::stig_cmd;
 
 // ---------------------------------------------------------------------------
 // 1. Happy path: empty directory produces all expected artifacts

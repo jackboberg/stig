@@ -1,33 +1,9 @@
-use assert_cmd::Command;
+mod common;
+
 use predicates::prelude::*;
 use tempfile::TempDir;
 
-const STIG_ENV_KEYS: &[&str] = &[
-    "STIG_CONFIG",
-    "STIG_DATABASE_PATH",
-    "DATABASE_PATH",
-    "STIG_MIGRATIONS_DIR",
-    "STIG_BACKUPS_DIR",
-    "STIG_NO_SNAPSHOT",
-    "STIG_NO_CHECKSUM",
-];
-
-fn stig_cmd(dir: &TempDir) -> Command {
-    let mut cmd = Command::cargo_bin("stig").unwrap();
-    cmd.current_dir(dir.path());
-    for key in STIG_ENV_KEYS {
-        cmd.env_remove(key);
-    }
-    cmd
-}
-
-fn write_migration(dir: &TempDir, timestamp: &str, slug: &str, content: &str) {
-    let migrations_dir = dir.path().join("db/migrations");
-    std::fs::create_dir_all(&migrations_dir).unwrap();
-    let filename = format!("{timestamp}_{slug}.sql");
-    let path = migrations_dir.join(filename);
-    std::fs::write(&path, content).unwrap();
-}
+use common::{stig_cmd, write_migration};
 
 fn status_output(dir: &TempDir) -> String {
     let output = stig_cmd(dir).arg("status").output().unwrap();
