@@ -62,7 +62,11 @@ pub fn run(dry_run: bool) -> anyhow::Result<()> {
 
     let n_pending = plan.pending().len();
     let n_current = plan.entries.len() - n_pending;
-    println!("✓ {n_pending} applied, {n_current} already up to date");
+    if dry_run {
+        println!("✓ {n_pending} would be applied, {n_current} already up to date");
+    } else {
+        println!("✓ {n_pending} applied, {n_current} already up to date");
+    }
 
     Ok(())
 }

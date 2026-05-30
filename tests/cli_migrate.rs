@@ -197,6 +197,9 @@ fn migrate_dry_run_does_not_mutate() {
         .success()
         .stdout(predicate::str::contains(
             "would apply  20240101000000_create_users.sql",
+        ))
+        .stdout(predicate::str::contains(
+            "✓ 1 would be applied, 0 already up to date",
         ));
 
     assert_eq!(count_schema_migrations(&dir), 0);
@@ -289,6 +292,6 @@ fn migrate_dry_run_noop_when_up_to_date() {
         .assert()
         .success()
         .stdout(predicate::str::contains(
-            "✓ 0 applied, 1 already up to date",
+            "✓ 0 would be applied, 1 already up to date",
         ));
 }
