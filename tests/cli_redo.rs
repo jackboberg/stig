@@ -87,7 +87,7 @@ fn redo_reapplies_edited_migration() {
         .assert()
         .success()
         .stdout(predicate::str::contains("restoring pre-20240102000000"))
-        .stdout(predicate::str::contains("re-applying"))
+        .stdout(predicate::str::contains("apply"))
         .stdout(predicate::str::contains("✓ redo complete"));
 
     // The old table (posts) should be gone; the new table (articles) should exist.

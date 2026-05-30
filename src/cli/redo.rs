@@ -151,16 +151,6 @@ fn reapply_pending(config: &Config, migrations_dir: &Path) -> anyhow::Result<()>
     let files = discover(migrations_dir).context("failed to discover migration files")?;
     let plan = Plan::build(&files, db.connection())?;
 
-    for entry in plan.pending() {
-        let file = entry.file.as_ref().context("pending entry has no file")?;
-        let filename = file
-            .path
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| entry.version.clone());
-        println!("re-applying {filename}");
-    }
-
     apply::apply_pending(&db, &plan, config, false)?;
 
     Ok(())
