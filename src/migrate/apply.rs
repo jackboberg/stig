@@ -141,13 +141,15 @@ pub fn apply_pending(db: &Db, plan: &Plan, config: &Config, dry_run: bool) -> Re
             )
             .with_context(|| format!("failed to record {version} in schema_migrations"))?;
 
-        snapshot::prune_snapshots(&snapshots_dir, config.snapshot_keep)?;
-
         if can_snapshot {
             println!("apply  {filename}  (snapshot: pre-{version}.db)");
         } else {
             println!("apply  {filename}");
         }
+    }
+
+    if !dry_run && can_snapshot && snapshots_dir.exists() {
+        snapshot::prune_snapshots(&snapshots_dir, config.snapshot_keep)?;
     }
 
     Ok(())
