@@ -1,7 +1,7 @@
-use anyhow::{Context, Result};
+use anyhow::Context;
 
 use crate::config::Config;
-use crate::db::Db;
+use crate::db::{Db, ensure_schema_migrations};
 use crate::errors::CliError;
 use crate::migrate::apply;
 use crate::migrate::discover::discover;
@@ -68,19 +68,5 @@ pub fn run(dry_run: bool) -> anyhow::Result<()> {
         println!("✓ {n_pending} applied, {n_current} already up to date");
     }
 
-    Ok(())
-}
-
-/// Ensure the `schema_migrations` table exists (created by `init`, but
-/// `migrate` must also handle a DB that was created externally).
-fn ensure_schema_migrations(conn: &rusqlite::Connection) -> Result<()> {
-    conn.execute_batch(
-        "CREATE TABLE IF NOT EXISTS schema_migrations (
-            version    TEXT NOT NULL PRIMARY KEY,
-            checksum   TEXT NOT NULL,
-            applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );",
-    )
-    .context("failed to ensure schema_migrations table")?;
     Ok(())
 }

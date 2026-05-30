@@ -141,6 +141,24 @@ impl Db {
 }
 
 // ---------------------------------------------------------------------------
+// Schema helpers
+// ---------------------------------------------------------------------------
+
+/// Ensure the `schema_migrations` table exists (created by `init`, but
+/// other commands must also handle a DB that was created externally).
+pub fn ensure_schema_migrations(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS schema_migrations (
+            version    TEXT NOT NULL PRIMARY KEY,
+            checksum   TEXT NOT NULL,
+            applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );",
+    )
+    .context("failed to ensure schema_migrations table")?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Validation helpers
 // ---------------------------------------------------------------------------
 
