@@ -63,15 +63,22 @@ pub fn run() -> Result<()> {
             }
             MigrationStatus::Applied { drifted, .. } => {
                 n_applied += 1;
-                if *drifted {
-                    n_drifted += 1;
-                }
+                let drift_display = if config.checksum_check {
+                    if *drifted {
+                        n_drifted += 1;
+                        "yes"
+                    } else {
+                        "no"
+                    }
+                } else {
+                    "\u{2014}"
+                };
                 let snap = if snapshot::snapshot_exists(&entry.version, &snapshots_dir) {
                     "yes"
                 } else {
                     "pruned"
                 };
-                ("yes", if *drifted { "yes" } else { "no" }, snap)
+                ("yes", drift_display, snap)
             }
             MigrationStatus::OrphanApplied { .. } => {
                 n_applied += 1;
@@ -92,7 +99,11 @@ pub fn run() -> Result<()> {
 
     // Summary
     println!();
-    println!("summary: {n_applied} applied, {n_pending} pending, {n_drifted} drifted");
+    if config.checksum_check {
+        println!("summary: {n_applied} applied, {n_pending} pending, {n_drifted} drifted");
+    } else {
+        println!("summary: {n_applied} applied, {n_pending} pending");
+    }
 
     // Exit 3 on drift
     if config.checksum_check && n_drifted > 0 {
