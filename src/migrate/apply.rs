@@ -274,6 +274,12 @@ mod tests {
     }
 
     #[test]
+    fn strip_directive_leading_whitespace_on_directive() {
+        let input = "  stig: non-transactional\nSELECT 1;\n";
+        assert_eq!(strip_directive(input), "SELECT 1;\n");
+    }
+
+    #[test]
     fn strip_directive_empty_input() {
         assert_eq!(strip_directive(""), "");
     }
