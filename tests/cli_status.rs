@@ -10,6 +10,10 @@ fn status_output(dir: &TempDir) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
+fn migrations_dir(dir: &TempDir) -> std::path::PathBuf {
+    dir.path().join("db/migrations")
+}
+
 // ---------------------------------------------------------------------------
 // 1. All applied — no pending, no drift
 // ---------------------------------------------------------------------------
@@ -142,4 +146,105 @@ fn status_orphan_applied() {
     // migration still has its file so it shows as applied normally.
     let output = status_output(&dir);
     insta::assert_snapshot!("orphan_applied", output);
+}
+
+// ---------------------------------------------------------------------------
+// 5. checksum_check=off — drift column shows "—", no drift in summary
+// ---------------------------------------------------------------------------
+
+#[test]
+fn status_checksum_check_off_hides_drift() {
+    let dir = TempDir::new().unwrap();
+
+    let config = indoc::indoc! {r#"
+        database_path  = "app.db"
+        migrations_dir = "db/migrations"
+        backups_dir    = ".local/db-backups"
+        checksum_check = false
+    "#};
+    std::fs::write(dir.path().join("stig.toml"), config).unwrap();
+    std::fs::create_dir_all(dir.path().join("db/migrations")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".local/db-backups/snapshots")).unwrap();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_users",
+        "CREATE TABLE users (id INTEGER);",
+    );
+    stig_cmd(&dir).arg("migrate").assert().success();
+
+    // Edit the migration to create drift
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_users",
+        "CREATE TABLE users (id INTEGER, name TEXT);",
+    );
+
+    // Status should succeed (no exit 3) and show "—" for drifted
+    let output = status_output(&dir);
+    insta::assert_snapshot!("checksum_check_off", output);
+}
+
+// ---------------------------------------------------------------------------
+// 6. Empty migrations directory
+// ---------------------------------------------------------------------------
+
+#[test]
+fn status_empty_migrations_dir() {
+    let dir = TempDir::new().unwrap();
+    stig_cmd(&dir).arg("init").assert().success();
+
+    let output = status_output(&dir);
+    insta::assert_snapshot!("empty_migrations_dir", output);
+}
+
+// ---------------------------------------------------------------------------
+// 7. Missing migrations directory — exits 4
+// ---------------------------------------------------------------------------
+
+#[test]
+fn status_exits_4_when_migrations_dir_missing() {
+    let dir = TempDir::new().unwrap();
+
+    stig_cmd(&dir).arg("init").assert().success();
+    std::fs::remove_dir_all(migrations_dir(&dir)).unwrap();
+
+    stig_cmd(&dir)
+        .arg("status")
+        .assert()
+        .failure()
+        .code(predicate::eq(4))
+        .stderr(predicate::str::contains("migrations directory not found"));
+}
+
+// ---------------------------------------------------------------------------
+// 8. Snapshot pruned — shows "pruned" after snapshot deletion
+// ---------------------------------------------------------------------------
+
+#[test]
+fn status_snapshot_pruned() {
+    let dir = TempDir::new().unwrap();
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_users",
+        "CREATE TABLE users (id INTEGER);",
+    );
+    stig_cmd(&dir).arg("migrate").assert().success();
+
+    // Delete the snapshot to simulate pruning
+    let snapshots_dir = dir.path().join(".local/db-backups/snapshots");
+    for entry in std::fs::read_dir(&snapshots_dir).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_name().to_string_lossy().starts_with("pre-") {
+            std::fs::remove_file(entry.path()).unwrap();
+        }
+    }
+
+    let output = status_output(&dir);
+    insta::assert_snapshot!("snapshot_pruned", output);
 }

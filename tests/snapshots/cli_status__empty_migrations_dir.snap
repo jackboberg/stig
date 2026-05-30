@@ -1,0 +1,13 @@
+---
+source: tests/cli_status.rs
+assertion_line: 200
+expression: output
+---
+database: app.db
+migrations dir: db/migrations
+checksum check: on
+
+  applied   drifted   snapshot   version                            file
+  -------   -------   --------   --------------------------------   -----------------------------------------
+
+summary: 0 applied, 0 pending, 0 drifted
