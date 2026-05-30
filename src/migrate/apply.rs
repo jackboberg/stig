@@ -202,12 +202,12 @@ pub fn apply_pending(db: &Db, plan: &Plan, config: &Config, dry_run: bool) -> Re
             let sql = strip_directive(&content);
             db.connection()
                 .execute_batch(&sql)
-                .with_context(|| format!("failed to execute {version}"))?;
+                .with_context(|| format!("failed to execute {filename} ({version})"))?;
         } else {
             let sql = format!("BEGIN TRANSACTION;\n{content}\nCOMMIT;");
             db.connection()
                 .execute_batch(&sql)
-                .with_context(|| format!("failed to execute {version}"))?;
+                .with_context(|| format!("failed to execute {filename} ({version})"))?;
         }
 
         db.connection()
@@ -215,7 +215,7 @@ pub fn apply_pending(db: &Db, plan: &Plan, config: &Config, dry_run: bool) -> Re
                 "INSERT INTO schema_migrations (version, checksum) VALUES (?1, ?2)",
                 params![version, checksum],
             )
-            .with_context(|| format!("failed to record {version} in schema_migrations"))?;
+            .with_context(|| format!("failed to record {filename} ({version}) in schema_migrations"))?;
 
         n_applied += 1;
 
