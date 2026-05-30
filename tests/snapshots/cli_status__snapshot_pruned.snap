@@ -1,0 +1,14 @@
+---
+source: tests/cli_status.rs
+assertion_line: 249
+expression: output
+---
+database: app.db
+migrations dir: db/migrations
+checksum check: on
+
+  applied   drifted   snapshot   version                            file
+  -------   -------   --------   --------------------------------   -----------------------------------------
+  yes       no        pruned     20240101000000_create_users        20240101000000_create_users.sql
+
+summary: 1 applied, 0 pending, 0 drifted

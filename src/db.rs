@@ -19,11 +19,15 @@
 //! higher-level commands are responsible for checking [`Db::is_memory`] and
 //! declining to proceed.
 
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use rusqlite::Connection;
 use tracing::warn;
 
 use crate::config::Config;
+use crate::migrate::plan::PlannedMigration;
+use crate::snapshot;
 
 // ---------------------------------------------------------------------------
 // Public struct
@@ -138,6 +142,49 @@ impl Db {
 
         Ok(())
     }
+}
+
+// ---------------------------------------------------------------------------
+// Schema helpers
+// ---------------------------------------------------------------------------
+
+/// Ensure the `schema_migrations` table exists (created by `init`, but
+/// other commands must also handle a DB that was created externally).
+pub fn ensure_schema_migrations(conn: &Connection) -> Result<()> {
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS schema_migrations (
+            version    TEXT NOT NULL PRIMARY KEY,
+            checksum   TEXT NOT NULL,
+            applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+        );",
+    )
+    .context("failed to ensure schema_migrations table")?;
+    Ok(())
+}
+
+/// Format a user-facing drift error message for the given entries.
+///
+/// Shared by `status` and `migrate` commands to keep messages consistent.
+pub fn format_drift_messages(entries: &[&PlannedMigration], snapshots_dir: &Path) -> String {
+    let mut msg = String::new();
+    for entry in entries {
+        let version = &entry.version;
+        let available = snapshot::snapshot_exists(version, snapshots_dir);
+        if available {
+            msg.push_str(&format!(
+                "migration {version} has been edited since it was applied\n\
+                 snapshot pre-{version}.db is available\n\
+                 \u{2192} run: stig redo {version}\n"
+            ));
+        } else {
+            msg.push_str(&format!(
+                "migration {version} has been edited since it was applied\n\
+                 snapshot pre-{version}.db has been pruned\n\
+                 \u{2192} revert the edit or run: stig reset\n"
+            ));
+        }
+    }
+    msg.trim().to_string()
 }
 
 // ---------------------------------------------------------------------------
