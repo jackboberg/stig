@@ -164,6 +164,7 @@ pub fn apply_pending(db: &Db, plan: &Plan, config: &Config, dry_run: bool) -> Re
     let snapshots_dir = project_root.join(&config.backups_dir).join("snapshots");
     let db_path = resolve_db_path(config);
     let can_snapshot = config.auto_snapshot && !db.is_memory();
+    let mut n_applied = 0u32;
 
     for entry in plan.pending() {
         let version = &entry.version;
@@ -216,6 +217,8 @@ pub fn apply_pending(db: &Db, plan: &Plan, config: &Config, dry_run: bool) -> Re
             )
             .with_context(|| format!("failed to record {version} in schema_migrations"))?;
 
+        n_applied += 1;
+
         if can_snapshot {
             println!("apply  {filename}  (snapshot: pre-{version}.db)");
         } else {
@@ -223,7 +226,7 @@ pub fn apply_pending(db: &Db, plan: &Plan, config: &Config, dry_run: bool) -> Re
         }
     }
 
-    if !dry_run && can_snapshot && snapshots_dir.exists() {
+    if !dry_run && can_snapshot && snapshots_dir.exists() && n_applied > 0 {
         snapshot::prune_snapshots(&snapshots_dir, config.snapshot_keep)?;
     }
 
