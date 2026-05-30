@@ -48,10 +48,10 @@ pub fn run(yes: bool) -> anyhow::Result<()> {
 
     reapply_pending(&config, &migrations_dir)?;
 
+    println!("✓ reset complete");
+
     snapshot::prune_resets(&resets_dir, config.reset_keep)
         .context("failed to prune reset backups")?;
-
-    println!("✓ reset complete");
 
     Ok(())
 }
