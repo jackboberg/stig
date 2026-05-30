@@ -80,7 +80,7 @@ pub fn run() -> Result<()> {
         };
 
         let file_name = match &entry.file {
-            Some(f) => f.path.file_name().unwrap().to_str().unwrap_or(""),
+            Some(f) => f.path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
             None => "\u{2014}",
         };
 
