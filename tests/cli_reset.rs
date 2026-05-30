@@ -128,7 +128,7 @@ fn reset_creates_backup_artifact() {
         .unwrap()
         .filter_map(|e| e.ok())
         .map(|e| e.file_name().to_string_lossy().to_string())
-        .filter(|n| n.ends_with(".db") && !n.contains('-') || n.starts_with("reset-"))
+        .filter(|n| n.starts_with("reset-") && n.ends_with(".db"))
         .collect();
 
     assert_eq!(
