@@ -37,7 +37,11 @@ enum Command {
         yes: bool,
     },
     /// Reset the database to a snapshot.
-    Reset,
+    Reset {
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
     /// Generate code from the current schema.
     Generate,
     /// Manage database backups/snapshots.
@@ -56,7 +60,7 @@ fn main() {
         Command::Migrate { dry_run } => stig::cli::migrate::run(dry_run),
         Command::Status => stig::cli::status::run(),
         Command::Redo { version, yes } => stig::cli::redo::run(version, yes),
-        Command::Reset => stig::cli::reset::run(),
+        Command::Reset { yes } => stig::cli::reset::run(yes),
         Command::Generate => stig::cli::generate::run(),
         Command::Backups => stig::cli::backups::run(),
     };
