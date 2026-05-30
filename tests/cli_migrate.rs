@@ -295,3 +295,202 @@ fn migrate_dry_run_noop_when_up_to_date() {
             "✓ 0 would be applied, 1 already up to date",
         ));
 }
+
+// ---------------------------------------------------------------------------
+// 8. auto_snapshot=false — no snapshots taken
+// ---------------------------------------------------------------------------
+
+#[test]
+fn migrate_no_snapshot_when_disabled() {
+    let dir = TempDir::new().unwrap();
+
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_users",
+        "CREATE TABLE users (id INTEGER);",
+    );
+
+    stig_cmd(&dir)
+        .env("STIG_NO_SNAPSHOT", "1")
+        .arg("migrate")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "apply  20240101000000_create_users.sql",
+        ))
+        .stdout(predicate::str::contains(
+            "✓ 1 applied, 0 already up to date",
+        ));
+
+    assert_eq!(count_schema_migrations(&dir), 1);
+    // Snapshot should NOT exist when auto_snapshot is disabled
+    assert!(!snapshot_exists(&dir, "20240101000000_create_users"));
+}
+
+// ---------------------------------------------------------------------------
+// 9. checksum_check=false — drift is silently ignored
+// ---------------------------------------------------------------------------
+
+#[test]
+fn migrate_ignores_drift_when_checksum_check_disabled() {
+    let dir = TempDir::new().unwrap();
+
+    stig_cmd(&dir).arg("init").assert().success();
+
+    // Migration A — applied, then edited
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_users",
+        "CREATE TABLE users (id INTEGER);",
+    );
+    stig_cmd(&dir).arg("migrate").assert().success();
+
+    // Migration B — pending
+    write_migration(
+        &dir,
+        "20240102000000",
+        "create_posts",
+        "CREATE TABLE posts (id INTEGER);",
+    );
+
+    // Edit migration A to create drift
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_users",
+        "CREATE TABLE users (id INTEGER, name TEXT);",
+    );
+
+    // With STIG_NO_CHECKSUM, drift should be ignored and pending applied
+    stig_cmd(&dir)
+        .env("STIG_NO_CHECKSUM", "1")
+        .arg("migrate")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "✓ 1 applied, 1 already up to date",
+        ));
+
+    assert_eq!(count_schema_migrations(&dir), 2);
+}
+
+// ---------------------------------------------------------------------------
+// 10. Drift exits 3 even when pending migrations exist
+// ---------------------------------------------------------------------------
+
+#[test]
+fn migrate_drift_with_pending_fails_before_apply() {
+    let dir = TempDir::new().unwrap();
+
+    stig_cmd(&dir).arg("init").assert().success();
+
+    // Migration A — applied, then edited
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_users",
+        "CREATE TABLE users (id INTEGER);",
+    );
+    stig_cmd(&dir).arg("migrate").assert().success();
+
+    // Migration B — pending, should never be applied because drift fails first
+    write_migration(
+        &dir,
+        "20240102000000",
+        "create_posts",
+        "CREATE TABLE posts (id INTEGER);",
+    );
+
+    // Edit migration A to create drift
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_users",
+        "CREATE TABLE users (id INTEGER, name TEXT);",
+    );
+
+    stig_cmd(&dir)
+        .arg("migrate")
+        .assert()
+        .failure()
+        .code(3)
+        .stderr(predicate::str::contains(
+            "migration 20240101000000_create_users has been edited",
+        ));
+
+    // Migration B should NOT have been applied
+    assert_eq!(count_schema_migrations(&dir), 1);
+
+    // Verify migration B's table does not exist
+    let db_path = dir.path().join("app.db");
+    let conn = Connection::open(db_path).unwrap();
+    let post_count: i64 = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='posts'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(post_count, 0);
+}
+
+// ---------------------------------------------------------------------------
+// 11. Snapshots are pruned after migration, keeping only snapshot_keep
+// ---------------------------------------------------------------------------
+
+#[test]
+fn migrate_prunes_snapshots() {
+    let dir = TempDir::new().unwrap();
+
+    // Write a custom stig.toml with snapshot_keep=1 so pruning is observable
+    // with just 2 migrations.
+    let config = indoc::indoc! {r#"
+        database_path  = "app.db"
+        migrations_dir = "db/migrations"
+        backups_dir    = ".local/db-backups"
+        snapshot_keep  = 1
+        auto_snapshot  = true
+        checksum_check = true
+    "#};
+    std::fs::write(dir.path().join("stig.toml"), config).unwrap();
+    std::fs::create_dir_all(dir.path().join("db/migrations")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".local/db-backups/snapshots")).unwrap();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "first",
+        "CREATE TABLE a (id INTEGER);",
+    );
+    write_migration(
+        &dir,
+        "20240102000000",
+        "second",
+        "CREATE TABLE b (id INTEGER);",
+    );
+
+    stig_cmd(&dir)
+        .arg("migrate")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "✓ 2 applied, 0 already up to date",
+        ));
+
+    assert_eq!(count_schema_migrations(&dir), 2);
+
+    // With snapshot_keep=1, only 1 snapshot should remain.
+    // The first snapshot (pre-20240101000000_first.db) should have been pruned.
+    assert!(
+        !snapshot_exists(&dir, "20240101000000_first"),
+        "first snapshot should have been pruned"
+    );
+    assert!(
+        snapshot_exists(&dir, "20240102000000_second"),
+        "second snapshot should still exist"
+    );
+}
