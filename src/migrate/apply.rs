@@ -88,6 +88,7 @@ pub fn apply_pending(db: &Db, plan: &Plan, config: &Config, dry_run: bool) -> Re
     let project_root = &config.project_root;
     let snapshots_dir = project_root.join(&config.backups_dir).join("snapshots");
     let db_path = resolve_db_path(config);
+    let can_snapshot = config.auto_snapshot && !db.is_memory();
 
     for entry in plan.pending() {
         let version = &entry.version;
@@ -102,7 +103,7 @@ pub fn apply_pending(db: &Db, plan: &Plan, config: &Config, dry_run: bool) -> Re
         let content = std::fs::read_to_string(&file.path)
             .with_context(|| format!("failed to read {}", file.path.display()))?;
 
-        if config.auto_snapshot && !dry_run {
+        if can_snapshot && !dry_run {
             db.checkpoint()?;
             snapshot::take_snapshot(version, &db_path, &snapshots_dir)
                 .with_context(|| format!("failed to snapshot before {version}"))?;
@@ -111,7 +112,7 @@ pub fn apply_pending(db: &Db, plan: &Plan, config: &Config, dry_run: bool) -> Re
         let is_non_tx = has_non_transactional_directive(&content);
 
         if dry_run {
-            if config.auto_snapshot {
+            if can_snapshot {
                 println!("would apply  {filename}  (snapshot: pre-{version}.db)");
             } else {
                 println!("would apply  {filename}");
@@ -142,7 +143,7 @@ pub fn apply_pending(db: &Db, plan: &Plan, config: &Config, dry_run: bool) -> Re
 
         snapshot::prune_snapshots(&snapshots_dir, config.snapshot_keep)?;
 
-        if config.auto_snapshot {
+        if can_snapshot {
             println!("apply  {filename}  (snapshot: pre-{version}.db)");
         } else {
             println!("apply  {filename}");
