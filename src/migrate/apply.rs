@@ -18,16 +18,42 @@ fn resolve_db_path(config: &Config) -> PathBuf {
 /// directive.
 ///
 /// The directive must appear as the first meaningful line — the first line
-/// that is not blank and not a SQL comment (`-- ...`).  This allows any
-/// number of leading comments or blank lines before the directive.
+/// that is not blank and not a SQL comment (`-- ...` or `/* ... */`).  This
+/// allows any number of leading comments or blank lines before the directive.
 pub fn has_non_transactional_directive(content: &str) -> bool {
+    let mut in_block_comment = false;
     for line in content.lines() {
         let trimmed = line.trim();
+        if in_block_comment {
+            if let Some(end) = trimmed.find("*/") {
+                in_block_comment = false;
+                let after = trimmed[end + 2..].trim();
+                if after.is_empty() {
+                    continue;
+                }
+                return after.eq_ignore_ascii_case("stig: non-transactional");
+            }
+            continue;
+        }
         if trimmed.is_empty() {
             continue;
         }
         if trimmed.starts_with("--") {
             continue;
+        }
+        if let Some(start) = trimmed.find("/*") {
+            if let Some(end) = trimmed[start + 2..].find("*/") {
+                // Single-line block comment: /* ... */
+                let after = trimmed[start + 2 + end + 2..].trim();
+                if after.is_empty() {
+                    continue;
+                }
+                return after.eq_ignore_ascii_case("stig: non-transactional");
+            } else {
+                // Block comment starts but doesn't end on this line
+                in_block_comment = true;
+                continue;
+            }
         }
         return trimmed.eq_ignore_ascii_case("stig: non-transactional");
     }
@@ -40,20 +66,76 @@ pub fn has_non_transactional_directive(content: &str) -> bool {
 /// is passed to SQLite, since it is not valid SQL.
 pub fn strip_directive(content: &str) -> String {
     let mut directive_found = false;
+    let mut in_block_comment = false;
     let mut result = String::with_capacity(content.len());
 
     for line in content.lines() {
-        if !directive_found {
-            let trimmed = line.trim();
-            if trimmed.is_empty() || trimmed.starts_with("--") {
+        if directive_found {
+            result.push_str(line);
+            result.push('\n');
+            continue;
+        }
+
+        let trimmed = line.trim();
+        if in_block_comment {
+            result.push_str(line);
+            result.push('\n');
+            if let Some(end) = trimmed.find("*/") {
+                in_block_comment = false;
+                let after = trimmed[end + 2..].trim();
+                if after.eq_ignore_ascii_case("stig: non-transactional") {
+                    directive_found = true;
+                    // Remove the trailing newline we just added for this line
+                    // since the directive part should be stripped.
+                    // But we need to keep the block comment part.
+                    // Reconstruct: keep everything up to and including */, strip directive.
+                    let prefix_end = line.find("*/").unwrap() + 2;
+                    let prefix = &line[..prefix_end];
+                    // Remove the line we just added and add just the prefix
+                    let trim_len = result.len() - line.len() - 1;
+                    result.truncate(trim_len);
+                    result.push_str(prefix);
+                    result.push('\n');
+                }
+            }
+            continue;
+        }
+        if trimmed.is_empty() {
+            result.push_str(line);
+            result.push('\n');
+            continue;
+        }
+        if trimmed.starts_with("--") {
+            result.push_str(line);
+            result.push('\n');
+            continue;
+        }
+        if let Some(start) = trimmed.find("/*") {
+            if let Some(end) = trimmed[start + 2..].find("*/") {
+                // Single-line block comment: /* ... */
+                let after = trimmed[start + 2 + end + 2..].trim();
+                if after.eq_ignore_ascii_case("stig: non-transactional") {
+                    directive_found = true;
+                    // Keep the comment part, strip the directive
+                    let comment_end = start + 2 + end + 2;
+                    let prefix = &trimmed[..comment_end];
+                    if !prefix.trim().is_empty() {
+                        result.push_str(prefix);
+                        result.push('\n');
+                    }
+                    continue;
+                }
+            } else {
+                // Block comment starts but doesn't end on this line
+                in_block_comment = true;
                 result.push_str(line);
                 result.push('\n');
                 continue;
             }
-            if trimmed.eq_ignore_ascii_case("stig: non-transactional") {
-                directive_found = true;
-                continue;
-            }
+        }
+        if trimmed.eq_ignore_ascii_case("stig: non-transactional") {
+            directive_found = true;
+            continue;
         }
         result.push_str(line);
         result.push('\n');
@@ -224,6 +306,42 @@ mod tests {
         assert!(!has_non_transactional_directive("-- a\n-- b\n-- c\n"));
     }
 
+    #[test]
+    fn directive_in_single_line_block_comment_is_skipped() {
+        let content = "/* stig: non-transactional */\nSELECT 1;\n";
+        assert!(!has_non_transactional_directive(content));
+    }
+
+    #[test]
+    fn directive_after_single_line_block_comment_is_detected() {
+        let content = "/* migration header */\nstig: non-transactional\nSELECT 1;\n";
+        assert!(has_non_transactional_directive(content));
+    }
+
+    #[test]
+    fn directive_in_multi_line_block_comment_is_skipped() {
+        let content = "/*\n * stig: non-transactional\n */\nSELECT 1;\n";
+        assert!(!has_non_transactional_directive(content));
+    }
+
+    #[test]
+    fn directive_after_multi_line_block_comment_is_detected() {
+        let content = "/*\n * Migration description\n */\nstig: non-transactional\nSELECT 1;\n";
+        assert!(has_non_transactional_directive(content));
+    }
+
+    #[test]
+    fn directive_on_same_line_after_block_comment_end() {
+        let content = "/* comment */ stig: non-transactional\nSELECT 1;\n";
+        assert!(has_non_transactional_directive(content));
+    }
+
+    #[test]
+    fn block_comment_with_no_closing_treated_as_unclosed() {
+        let content = "/* stig: non-transactional\nSELECT 1;\n";
+        assert!(!has_non_transactional_directive(content));
+    }
+
     // -----------------------------------------------------------------------
     // strip_directive tests
     // -----------------------------------------------------------------------
@@ -295,6 +413,54 @@ mod tests {
         assert_eq!(
             strip_directive(input),
             "-- header\n\n\nCREATE TABLE x (id INTEGER);\n"
+        );
+    }
+
+    #[test]
+    fn strip_directive_preserves_single_line_block_comment() {
+        let input = "/* migration header */\nstig: non-transactional\nSELECT 1;\n";
+        assert_eq!(
+            strip_directive(input),
+            "/* migration header */\nSELECT 1;\n"
+        );
+    }
+
+    #[test]
+    fn strip_directive_preserves_multi_line_block_comment() {
+        let input = "/*\n * Migration description\n */\nstig: non-transactional\nSELECT 1;\n";
+        assert_eq!(
+            strip_directive(input),
+            "/*\n * Migration description\n */\nSELECT 1;\n"
+        );
+    }
+
+    #[test]
+    fn strip_directive_preserves_block_comment_with_directive_inside() {
+        let input = "/* stig: non-transactional */\nSELECT 1;\n";
+        assert_eq!(
+            strip_directive(input),
+            "/* stig: non-transactional */\nSELECT 1;\n"
+        );
+    }
+
+    #[test]
+    fn strip_directive_handles_directive_after_multi_line_block_comment() {
+        let input = "/*\n * Comment\n */\nstig: non-transactional\nVACUUM;\n";
+        assert_eq!(strip_directive(input), "/*\n * Comment\n */\nVACUUM;\n");
+    }
+
+    #[test]
+    fn strip_directive_handles_directive_on_same_line_after_block_comment() {
+        let input = "/* comment */ stig: non-transactional\nSELECT 1;\n";
+        assert_eq!(strip_directive(input), "/* comment */\nSELECT 1;\n");
+    }
+
+    #[test]
+    fn strip_directive_handles_unclosed_block_comment() {
+        let input = "/* stig: non-transactional\nSELECT 1;\n";
+        assert_eq!(
+            strip_directive(input),
+            "/* stig: non-transactional\nSELECT 1;\n"
         );
     }
 }
