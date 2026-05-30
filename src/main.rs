@@ -28,8 +28,14 @@ enum Command {
     },
     /// Show migration status.
     Status,
-    /// Roll back the last migration and re-apply it.
-    Redo,
+    /// Restore a snapshot and re-apply migrations from that version forward.
+    Redo {
+        /// Version to redo from (defaults to most recent applied migration)
+        version: Option<String>,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
     /// Reset the database to a snapshot.
     Reset,
     /// Generate code from the current schema.
@@ -49,7 +55,7 @@ fn main() {
         } => stig::cli::new::run(description, no_edit),
         Command::Migrate { dry_run } => stig::cli::migrate::run(dry_run),
         Command::Status => stig::cli::status::run(),
-        Command::Redo => stig::cli::redo::run(),
+        Command::Redo { version, yes } => stig::cli::redo::run(version, yes),
         Command::Reset => stig::cli::reset::run(),
         Command::Generate => stig::cli::generate::run(),
         Command::Backups => stig::cli::backups::run(),

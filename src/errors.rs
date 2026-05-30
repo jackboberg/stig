@@ -13,6 +13,10 @@ pub enum CliError {
     #[error("config error: {0}")]
     Usage(String),
 
+    /// Exit code 2 — user declined a confirmation prompt.
+    #[error("operation cancelled")]
+    Declined,
+
     /// Exit code 3 — drift detected between applied migrations and on-disk files.
     #[error("drift detected: {0}")]
     Drift(String),
@@ -32,6 +36,7 @@ impl CliError {
         match self {
             CliError::Generic(_) => 1,
             CliError::Usage(_) => 2,
+            CliError::Declined => 2,
             CliError::Drift(_) => 3,
             CliError::Prerequisite(_) => 4,
             CliError::Locked(_) => 5,
