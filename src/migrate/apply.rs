@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use rusqlite::params;
@@ -10,15 +10,8 @@ use crate::snapshot;
 
 use super::plan::Plan;
 
-/// Resolve the database path from config (relative paths are relative to
-/// `project_root`).
 fn resolve_db_path(config: &Config) -> PathBuf {
-    let raw = &config.database_path;
-    if raw == ":memory:" || Path::new(raw).is_absolute() {
-        PathBuf::from(raw)
-    } else {
-        config.project_root.join(raw)
-    }
+    config.resolve_path(&config.database_path)
 }
 
 /// Check whether the migration file contains a `stig: non-transactional`
