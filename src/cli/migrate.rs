@@ -1,12 +1,11 @@
 use anyhow::Context;
 
 use crate::config::Config;
-use crate::db::{Db, ensure_schema_migrations};
+use crate::db::{Db, ensure_schema_migrations, format_drift_messages};
 use crate::errors::CliError;
 use crate::migrate::apply;
 use crate::migrate::discover::discover;
 use crate::migrate::plan::Plan;
-use crate::snapshot;
 
 /// Run `stig migrate`.
 pub fn run(dry_run: bool) -> anyhow::Result<()> {
@@ -35,26 +34,8 @@ pub fn run(dry_run: bool) -> anyhow::Result<()> {
         let drifted = plan.drifted();
         if !drifted.is_empty() {
             let snapshots_dir = project_root.join(&config.backups_dir).join("snapshots");
-            let mut msg = String::new();
-            for entry in &drifted {
-                let version = &entry.version;
-                let snapshot_path = format!("pre-{version}.db");
-                let available = snapshot::snapshot_exists(version, &snapshots_dir);
-                if available {
-                    msg.push_str(&format!(
-                        "migration {version} has been edited since it was applied\n\
-                         snapshot {snapshot_path} is available\n\
-                         → run: stig redo {version}\n"
-                    ));
-                } else {
-                    msg.push_str(&format!(
-                        "migration {version} has been edited since it was applied\n\
-                         snapshot {snapshot_path} has been pruned\n\
-                         → revert the edit or run: stig reset\n"
-                    ));
-                }
-            }
-            return Err(CliError::Drift(msg.trim().to_string()).into());
+            let msg = format_drift_messages(&drifted, &snapshots_dir);
+            return Err(CliError::Drift(msg).into());
         }
     }
 

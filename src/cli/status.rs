@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 
 use crate::config::Config;
-use crate::db::{Db, ensure_schema_migrations};
+use crate::db::{Db, ensure_schema_migrations, format_drift_messages};
 use crate::errors::CliError;
 use crate::migrate::discover::discover;
 use crate::migrate::plan::{MigrationStatus, Plan};
@@ -107,25 +107,8 @@ pub fn run() -> Result<()> {
 
     // Exit 3 on drift
     if config.checksum_check && n_drifted > 0 {
-        let mut msg = String::new();
-        for entry in plan.drifted() {
-            let version = &entry.version;
-            let available = snapshot::snapshot_exists(version, &snapshots_dir);
-            if available {
-                msg.push_str(&format!(
-                    "migration {version} has been edited since it was applied\n\
-                     snapshot pre-{version}.db is available\n\
-                     \u{2192} run: stig redo {version}\n"
-                ));
-            } else {
-                msg.push_str(&format!(
-                    "migration {version} has been edited since it was applied\n\
-                     snapshot pre-{version}.db has been pruned\n\
-                     \u{2192} revert the edit or run: stig reset\n"
-                ));
-            }
-        }
-        return Err(CliError::Drift(msg.trim().to_string()).into());
+        let msg = format_drift_messages(&plan.drifted(), &snapshots_dir);
+        return Err(CliError::Drift(msg).into());
     }
 
     Ok(())
