@@ -165,7 +165,9 @@ fn reset_prunes_resets_beyond_keep() {
     std::fs::write(&config_path, "reset_keep = 2\n").unwrap();
 
     // Run reset 3 times; the oldest should be pruned.
-    // Sleep between resets to ensure distinct timestamps (second precision).
+    // Sleep between resets: snapshot filenames use second-precision UTC timestamps
+    // (`%Y%m%dT%H%M%SZ`), so resets within the same second collide. An injectable
+    // clock in the snapshot module would let tests skip this wait.
     for i in 0..3 {
         stig_cmd(&dir).arg("migrate").assert().success();
         stig_cmd(&dir).arg("reset").arg("--yes").assert().success();
