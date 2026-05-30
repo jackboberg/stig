@@ -23,6 +23,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
+use rusqlite::params;
 use tracing::warn;
 
 use crate::config::Config;
@@ -160,6 +161,20 @@ pub fn ensure_schema_migrations(conn: &Connection) -> Result<()> {
     )
     .context("failed to ensure schema_migrations table")?;
     Ok(())
+}
+
+/// Delete rows from `schema_migrations` where `version >= from_version`.
+///
+/// Returns the number of rows deleted. Used by `redo` to clear stale entries
+/// after restoring a snapshot.
+pub fn delete_from_version(conn: &Connection, from_version: &str) -> Result<usize> {
+    let n = conn
+        .execute(
+            "DELETE FROM schema_migrations WHERE version >= ?1",
+            params![from_version],
+        )
+        .context("failed to delete schema_migrations rows")?;
+    Ok(n)
 }
 
 /// Format a user-facing drift error message for the given entries.
@@ -447,5 +462,70 @@ mod tests {
             ..Config::default()
         };
         assert!(Db::open(&cfg).is_ok());
+    }
+
+    // -- delete_from_version -------------------------------------------------
+
+    #[test]
+    fn delete_from_version_removes_matching_and_newer_rows() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (
+                version    TEXT NOT NULL PRIMARY KEY,
+                checksum   TEXT NOT NULL,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );",
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO schema_migrations (version, checksum) VALUES (?1, ?2)",
+            params!["20240101000000_a", "a"],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO schema_migrations (version, checksum) VALUES (?1, ?2)",
+            params!["20240102000000_b", "b"],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO schema_migrations (version, checksum) VALUES (?1, ?2)",
+            params!["20240103000000_c", "c"],
+        )
+        .unwrap();
+
+        let n = delete_from_version(&conn, "20240102000000_b").unwrap();
+        assert_eq!(n, 2);
+
+        let remaining: Vec<String> = conn
+            .prepare("SELECT version FROM schema_migrations ORDER BY version")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(remaining, vec!["20240101000000_a"]);
+    }
+
+    #[test]
+    fn delete_from_version_returns_zero_when_no_match() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (
+                version    TEXT NOT NULL PRIMARY KEY,
+                checksum   TEXT NOT NULL,
+                applied_at TEXT NOT NULL DEFAULT (datetime('now'))
+            );",
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO schema_migrations (version, checksum) VALUES (?1, ?2)",
+            params!["20240101000000_a", "a"],
+        )
+        .unwrap();
+
+        let n = delete_from_version(&conn, "20240102000000_b").unwrap();
+        assert_eq!(n, 0);
     }
 }
