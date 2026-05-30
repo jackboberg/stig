@@ -52,12 +52,24 @@ pub fn run(version: Option<String>, yes: bool) -> anyhow::Result<()> {
 /// applied migration from the plan.
 fn resolve_target(plan: &Plan, version: Option<String>) -> anyhow::Result<String> {
     match version {
-        Some(v) => Ok(v),
+        Some(v) => {
+            let is_applied = plan
+                .entries
+                .iter()
+                .any(|e| matches!(e.status, MigrationStatus::Applied { .. }) && e.version == v);
+            if is_applied {
+                Ok(v)
+            } else {
+                Err(
+                    CliError::Prerequisite(format!("version not found in applied migrations: {v}"))
+                        .into(),
+                )
+            }
+        }
         None => plan
             .entries
             .iter()
-            .filter(|e| matches!(e.status, MigrationStatus::Applied { .. }))
-            .next_back()
+            .rfind(|e| matches!(e.status, MigrationStatus::Applied { .. }))
             .map(|e| e.version.clone())
             .ok_or_else(|| {
                 CliError::Prerequisite("no applied migrations to redo".to_string()).into()

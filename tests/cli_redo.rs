@@ -291,3 +291,34 @@ fn redo_with_yes_flag_runs_without_prompt() {
         .success()
         .stdout(predicate::str::contains("✓ redo complete"));
 }
+
+// ---------------------------------------------------------------------------
+// 7. Invalid version exits 4 with clear message
+// ---------------------------------------------------------------------------
+
+#[test]
+fn redo_exits_4_when_version_not_applied() {
+    let dir = TempDir::new().unwrap();
+
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_users",
+        "CREATE TABLE users (id INTEGER);",
+    );
+
+    stig_cmd(&dir).arg("migrate").assert().success();
+
+    stig_cmd(&dir)
+        .arg("redo")
+        .arg("20240102000000_nonexistent")
+        .arg("--yes")
+        .assert()
+        .failure()
+        .code(4)
+        .stderr(predicate::str::contains(
+            "version not found in applied migrations",
+        ));
+}
