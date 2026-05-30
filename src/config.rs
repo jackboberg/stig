@@ -59,6 +59,11 @@ pub struct GenerateTarget {
     /// Output file path (relative to project root, or absolute).
     pub path: String,
 
+    /// Optional human-friendly name. Used by `stig generate <name>` to select
+    /// a single target. Falls back to `kind` when not set.
+    #[serde(default)]
+    pub name: Option<String>,
+
     /// Optional post-generation format command. `{path}` is substituted with
     /// the output path.
     #[serde(default)]
@@ -68,6 +73,10 @@ pub struct GenerateTarget {
     /// Defaults to `["sqlite_%", "schema_migrations"]`.
     #[serde(default = "default_exclude")]
     pub exclude: Vec<String>,
+
+    /// Kind-specific options captured from unknown TOML keys.
+    #[serde(flatten)]
+    pub extra: toml::Table,
 }
 
 fn default_exclude() -> Vec<String> {
@@ -573,6 +582,7 @@ mod tests {
         assert_eq!(cfg.generate.len(), 1);
         assert_eq!(cfg.generate[0].kind, "typescript");
         assert_eq!(cfg.generate[0].path, "types.ts");
+        assert_eq!(cfg.generate[0].name, None);
         assert_eq!(cfg.generate[0].exclude, vec!["sqlite_%".to_string()]);
         assert_eq!(
             cfg.project_root,
