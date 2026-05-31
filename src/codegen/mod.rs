@@ -167,11 +167,12 @@ pub fn run_targets(
 
         let output = target.generate(conn, &config)?;
 
+        let suffix = if output.formatted { " (formatted)" } else { "" };
         tracing::info!(
             "generated {} ({} bytes){}",
             output.path.display(),
             output.bytes_written,
-            if output.formatted { " (formatted)" } else { "" }
+            suffix
         );
     }
 
