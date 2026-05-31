@@ -958,4 +958,42 @@ mod tests {
             "project_root must not appear in written TOML"
         );
     }
+
+    #[test]
+    fn write_round_trips_generate_target_extra_fields() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("stig.toml");
+
+        let mut extra = toml::Table::new();
+        extra.insert("indent".to_string(), toml::Value::Integer(4));
+        extra.insert(
+            "header".to_string(),
+            toml::Value::String("// auto-generated".to_string()),
+        );
+
+        let original = Config {
+            project_root: dir.path().to_path_buf(),
+            generate: vec![GenerateTarget {
+                kind: "typescript".to_string(),
+                path: "types.ts".to_string(),
+                name: Some("my-types".to_string()),
+                format: None,
+                exclude: vec!["sqlite_%".to_string()],
+                extra,
+            }],
+            ..Config::default()
+        };
+        original.write(&path).unwrap();
+
+        let loaded = Config::load(Some(&path), Some(&empty_env()), None).unwrap();
+        assert_eq!(loaded.generate.len(), 1);
+        assert_eq!(
+            loaded.generate[0].extra.get("indent"),
+            Some(&toml::Value::Integer(4))
+        );
+        assert_eq!(
+            loaded.generate[0].extra.get("header"),
+            Some(&toml::Value::String("// auto-generated".to_string()))
+        );
+    }
 }
