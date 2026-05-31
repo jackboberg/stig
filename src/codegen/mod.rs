@@ -287,9 +287,10 @@ mod tests {
         let conn = temp_conn();
         let dir = tempfile::tempdir().unwrap();
 
-        // Two entries: one named "alpha", one unnamed.
+        // Two entries: one named "alpha", one named "beta", both using
+        // a test-only kind that is not in the real registry.
         let alpha = GenerateTarget {
-            kind: "noop".to_string(),
+            kind: "__test_noop__".to_string(),
             path: "alpha.txt".to_string(),
             name: Some("alpha".to_string()),
             format: None,
@@ -297,7 +298,7 @@ mod tests {
             extra: toml::Table::new(),
         };
         let beta = GenerateTarget {
-            kind: "noop".to_string(),
+            kind: "__test_noop__".to_string(),
             path: "beta.txt".to_string(),
             name: Some("beta".to_string()),
             format: None,
@@ -305,15 +306,15 @@ mod tests {
             extra: toml::Table::new(),
         };
 
-        // Filter for "alpha" — but noop isn't in the real registry, so this
-        // exercises the filter-lookup path and returns UnknownKind (confirming
-        // the filter matched "alpha" rather than "beta").
+        // Filter for "alpha" — the filter should match the entry with
+        // name "alpha" (not "beta"), then fail with UnknownKind for
+        // "__test_noop__" because it's not a real registered kind.
         let result = run_targets(&conn, &[alpha, beta], dir.path(), Some("alpha"));
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            err.to_string().contains("noop"),
-            "should have looked up kind 'noop' for the matched entry"
+            err.to_string().contains("__test_noop__"),
+            "should have looked up kind '__test_noop__' for the matched entry"
         );
     }
 
@@ -327,7 +328,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
 
         let entry = GenerateTarget {
-            kind: "typescript".to_string(),
+            kind: "__test_ts__".to_string(),
             path: "types.ts".to_string(),
             name: Some("my-types".to_string()),
             format: None,
@@ -335,12 +336,12 @@ mod tests {
             extra: toml::Table::new(),
         };
 
-        // Filter by kind "typescript" — should match even though name differs.
-        let result = run_targets(&conn, &[entry], dir.path(), Some("typescript"));
-        // TypeScript target isn't implemented yet, so this will be
-        // UnknownKind. The important thing is it matched on kind.
+        // Filter by kind "__test_ts__" — should match even though name differs.
+        let result = run_targets(&conn, &[entry], dir.path(), Some("__test_ts__"));
+        // The kind isn't in the real registry, so this will be UnknownKind.
+        // The important thing is it matched on kind, not name.
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("typescript"));
+        assert!(result.unwrap_err().to_string().contains("__test_ts__"));
     }
 
     // -----------------------------------------------------------------------
