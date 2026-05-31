@@ -94,11 +94,8 @@ pub trait CodegenTarget: Send + Sync {
 /// Built-in codegen targets, initialized once.
 ///
 /// New targets are registered here — one entry per target.
-static REGISTRY: LazyLock<Vec<Box<dyn CodegenTarget>>> = LazyLock::new(|| {
-    vec![
-        // typescript::TypeScriptTarget — added in issue 15
-    ]
-});
+static REGISTRY: LazyLock<Vec<Box<dyn CodegenTarget>>> =
+    LazyLock::new(|| vec![Box::new(typescript::TypeScriptTarget)]);
 
 /// Return the set of built-in codegen targets.
 fn registry() -> &'static [Box<dyn CodegenTarget>] {

@@ -43,7 +43,10 @@ enum Command {
         yes: bool,
     },
     /// Generate code from the current schema.
-    Generate,
+    Generate {
+        /// Name or kind of target to generate (runs all if omitted)
+        target_name: Option<String>,
+    },
     /// Manage database backups/snapshots.
     Backups,
 }
@@ -61,7 +64,7 @@ fn main() {
         Command::Status => stig::cli::status::run(),
         Command::Redo { version, yes } => stig::cli::redo::run(version, yes),
         Command::Reset { yes } => stig::cli::reset::run(yes),
-        Command::Generate => stig::cli::generate::run(),
+        Command::Generate { target_name } => stig::cli::generate::run(target_name),
         Command::Backups => stig::cli::backups::run(),
     };
 
