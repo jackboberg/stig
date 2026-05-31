@@ -184,13 +184,6 @@ mod tests {
         }
     }
 
-    /// Helper: run_targets with a noop registry override.
-    ///
-    /// Since `registry()` is private and returns built-in targets, we test the
-    /// dispatcher logic by calling `run_targets` with noop entries and a
-    /// temporary database. The noop target is not in the real registry, so we
-    /// exercise the unknown-kind path instead. For end-to-end coverage of the
-    /// happy path we directly test the trait + config wiring.
     fn temp_conn() -> Connection {
         Connection::open_in_memory().unwrap()
     }
