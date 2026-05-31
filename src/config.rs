@@ -75,6 +75,11 @@ pub struct GenerateTarget {
     pub exclude: Vec<String>,
 
     /// Kind-specific options captured from unknown TOML keys.
+    ///
+    /// Note: `flatten` silently absorbs misspelled top-level keys (e.g.
+    /// `excude` instead of `exclude`). This is acceptable because unknown
+    /// keys are expected to be kind-specific; a future strict mode could
+    /// reject unrecognized keys if needed.
     #[serde(flatten)]
     pub extra: toml::Table,
 }
