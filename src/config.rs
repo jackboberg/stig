@@ -59,6 +59,11 @@ pub struct GenerateTarget {
     /// Output file path (relative to project root, or absolute).
     pub path: String,
 
+    /// Optional human-friendly name. Used by `stig generate <name>` to select
+    /// a single target. Falls back to `kind` when not set.
+    #[serde(default)]
+    pub name: Option<String>,
+
     /// Optional post-generation format command. `{path}` is substituted with
     /// the output path.
     #[serde(default)]
@@ -68,6 +73,15 @@ pub struct GenerateTarget {
     /// Defaults to `["sqlite_%", "schema_migrations"]`.
     #[serde(default = "default_exclude")]
     pub exclude: Vec<String>,
+
+    /// Kind-specific options captured from unknown TOML keys.
+    ///
+    /// Note: `flatten` silently absorbs misspelled top-level keys (e.g.
+    /// `excude` instead of `exclude`). This is acceptable because unknown
+    /// keys are expected to be kind-specific; a future strict mode could
+    /// reject unrecognized keys if needed.
+    #[serde(flatten)]
+    pub extra: toml::Table,
 }
 
 fn default_exclude() -> Vec<String> {
@@ -573,6 +587,7 @@ mod tests {
         assert_eq!(cfg.generate.len(), 1);
         assert_eq!(cfg.generate[0].kind, "typescript");
         assert_eq!(cfg.generate[0].path, "types.ts");
+        assert_eq!(cfg.generate[0].name, None);
         assert_eq!(cfg.generate[0].exclude, vec!["sqlite_%".to_string()]);
         assert_eq!(
             cfg.project_root,
@@ -941,6 +956,44 @@ mod tests {
         assert!(
             !contents.contains("project_root"),
             "project_root must not appear in written TOML"
+        );
+    }
+
+    #[test]
+    fn write_round_trips_generate_target_extra_fields() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("stig.toml");
+
+        let mut extra = toml::Table::new();
+        extra.insert("indent".to_string(), toml::Value::Integer(4));
+        extra.insert(
+            "header".to_string(),
+            toml::Value::String("// auto-generated".to_string()),
+        );
+
+        let original = Config {
+            project_root: dir.path().to_path_buf(),
+            generate: vec![GenerateTarget {
+                kind: "typescript".to_string(),
+                path: "types.ts".to_string(),
+                name: Some("my-types".to_string()),
+                format: None,
+                exclude: vec!["sqlite_%".to_string()],
+                extra,
+            }],
+            ..Config::default()
+        };
+        original.write(&path).unwrap();
+
+        let loaded = Config::load(Some(&path), Some(&empty_env()), None).unwrap();
+        assert_eq!(loaded.generate.len(), 1);
+        assert_eq!(
+            loaded.generate[0].extra.get("indent"),
+            Some(&toml::Value::Integer(4))
+        );
+        assert_eq!(
+            loaded.generate[0].extra.get("header"),
+            Some(&toml::Value::String("// auto-generated".to_string()))
         );
     }
 }
