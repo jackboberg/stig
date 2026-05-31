@@ -29,12 +29,21 @@ pub enum CodegenError {
         kind: String,
         registered: Vec<&'static str>,
     },
+
+    /// No configured target entry matches the filter selector.
+    #[error("no target named \"{selector}\"; available: {available:?}")]
+    UnknownTarget {
+        selector: String,
+        available: Vec<String>,
+    },
 }
 
 impl From<CodegenError> for CliError {
     fn from(e: CodegenError) -> Self {
         match &e {
-            CodegenError::UnknownKind { .. } => CliError::Prerequisite(e.to_string()),
+            CodegenError::UnknownKind { .. } | CodegenError::UnknownTarget { .. } => {
+                CliError::Prerequisite(e.to_string())
+            }
             CodegenError::Io(_) => CliError::Generic(e.into()),
             CodegenError::Target(_) => CliError::Generic(anyhow::anyhow!(e)),
         }
@@ -122,11 +131,13 @@ pub fn run_targets(
             match entry {
                 Some(e) => vec![e],
                 None => {
-                    // Collect registered kinds for the error message.
-                    let registered: Vec<&'static str> = registry.iter().map(|t| t.kind()).collect();
-                    return Err(CodegenError::UnknownKind {
-                        kind: selector.to_string(),
-                        registered,
+                    let available: Vec<String> = targets
+                        .iter()
+                        .map(|t| t.name.clone().unwrap_or_else(|| t.kind.clone()))
+                        .collect();
+                    return Err(CodegenError::UnknownTarget {
+                        selector: selector.to_string(),
+                        available,
                     });
                 }
             }
@@ -333,11 +344,11 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // 6. Filter with no matching name or kind returns UnknownKind
+    // 6. Filter with no matching name or kind returns UnknownTarget
     // -----------------------------------------------------------------------
 
     #[test]
-    fn filter_no_match_returns_unknown_kind() {
+    fn filter_no_match_returns_unknown_target() {
         let conn = temp_conn();
         let dir = tempfile::tempdir().unwrap();
 
@@ -352,7 +363,13 @@ mod tests {
 
         let result = run_targets(&conn, &[entry], dir.path(), Some("beta"));
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("beta"));
+        let err = result.unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("beta"), "error should name the selector");
+        assert!(
+            msg.contains("available"),
+            "error should list available targets"
+        );
     }
 
     // -----------------------------------------------------------------------
@@ -397,6 +414,16 @@ mod tests {
         let err = CodegenError::UnknownKind {
             kind: "bad".to_string(),
             registered: vec!["typescript"],
+        };
+        let cli_err: CliError = err.into();
+        assert_eq!(cli_err.exit_code(), 4);
+    }
+
+    #[test]
+    fn unknown_target_converts_to_cli_error_exit_4() {
+        let err = CodegenError::UnknownTarget {
+            selector: "missing".to_string(),
+            available: vec!["alpha".to_string()],
         };
         let cli_err: CliError = err.into();
         assert_eq!(cli_err.exit_code(), 4);
