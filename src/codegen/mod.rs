@@ -48,6 +48,7 @@ impl From<CodegenError> for CliError {
 ///
 /// Derived from the `[[generate]]` config entry with the output `path`
 /// resolved against the project root.
+#[derive(Debug)]
 pub struct CodegenConfig {
     pub path: PathBuf,
     pub exclude: Vec<String>,
@@ -56,6 +57,7 @@ pub struct CodegenConfig {
 }
 
 /// Result returned by a successful codegen run.
+#[derive(Debug)]
 pub struct GenerateOutput {
     pub path: PathBuf,
     pub bytes_written: u64,
