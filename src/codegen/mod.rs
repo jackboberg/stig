@@ -103,17 +103,17 @@ pub fn run_targets(
 
     // If a filter is provided, find the single matching target entry.
     let entries: Vec<&GenerateTarget> = match filter {
-        Some(name) => {
+        Some(selector) => {
             let entry = targets
                 .iter()
-                .find(|t| t.name.as_deref() == Some(name) || t.kind == name);
+                .find(|t| t.name.as_deref() == Some(selector) || t.kind == selector);
             match entry {
                 Some(e) => vec![e],
                 None => {
                     // Collect registered kinds for the error message.
                     let registered: Vec<&'static str> = registry.iter().map(|t| t.kind()).collect();
                     return Err(CodegenError::UnknownKind {
-                        kind: name.to_string(),
+                        kind: selector.to_string(),
                         registered,
                     });
                 }
