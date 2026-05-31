@@ -101,6 +101,10 @@ fn registry() -> &'static [Box<dyn CodegenTarget>] {
 ///
 /// `filter` optionally restricts execution to a single target matched by
 /// `name` or `kind`. When `None`, all configured targets run.
+///
+/// Precedence: `name` is checked first per entry, so the first entry whose
+/// `name` matches wins before later entries' `kind` values are checked.
+/// If two entries share a `name`, the first declared in the config is used.
 pub fn run_targets(
     conn: &Connection,
     targets: &[GenerateTarget],
