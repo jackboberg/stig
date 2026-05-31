@@ -1,6 +1,7 @@
 pub mod typescript;
 
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
 
 use rusqlite::Connection;
 
@@ -65,7 +66,7 @@ pub struct GenerateOutput {
 }
 
 /// Trait implemented by each codegen target.
-pub trait CodegenTarget {
+pub trait CodegenTarget: Send + Sync {
     /// Stable identifier used by config (`kind = "..."`).
     fn kind(&self) -> &'static str;
 
@@ -82,13 +83,18 @@ pub trait CodegenTarget {
 // Dispatcher
 // ---------------------------------------------------------------------------
 
-/// Return the set of built-in codegen targets.
+/// Built-in codegen targets, initialized once.
 ///
-/// New targets are registered here — one line per target.
-fn registry() -> Vec<Box<dyn CodegenTarget>> {
+/// New targets are registered here — one entry per target.
+static REGISTRY: LazyLock<Vec<Box<dyn CodegenTarget>>> = LazyLock::new(|| {
     vec![
         // typescript::TypeScriptTarget — added in issue 15
     ]
+});
+
+/// Return the set of built-in codegen targets.
+fn registry() -> &'static [Box<dyn CodegenTarget>] {
+    &REGISTRY
 }
 
 /// Run codegen targets for the given config entries.
