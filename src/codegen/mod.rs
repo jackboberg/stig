@@ -118,7 +118,7 @@ pub fn run_targets(
     targets: &[GenerateTarget],
     project_root: &Path,
     filter: Option<&str>,
-) -> Result<(), CodegenError> {
+) -> Result<Vec<GenerateOutput>, CodegenError> {
     let registry = registry();
 
     // If a filter is provided, find the single matching target entry.
@@ -143,6 +143,8 @@ pub fn run_targets(
         }
         None => targets.iter().collect(),
     };
+
+    let mut outputs = Vec::with_capacity(entries.len());
 
     for entry in &entries {
         let target = registry.iter().find(|t| t.kind() == entry.kind);
@@ -173,9 +175,11 @@ pub fn run_targets(
             output.bytes_written,
             suffix
         );
+
+        outputs.push(output);
     }
 
-    Ok(())
+    Ok(outputs)
 }
 
 // ---------------------------------------------------------------------------
