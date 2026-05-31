@@ -44,8 +44,7 @@ impl From<CodegenError> for CliError {
             CodegenError::UnknownKind { .. } | CodegenError::UnknownTarget { .. } => {
                 CliError::Prerequisite(e.to_string())
             }
-            CodegenError::Io(_) => CliError::Generic(e.into()),
-            CodegenError::Target(_) => CliError::Generic(anyhow::anyhow!(e)),
+            CodegenError::Io(_) | CodegenError::Target(_) => CliError::Generic(anyhow::anyhow!(e)),
         }
     }
 }
