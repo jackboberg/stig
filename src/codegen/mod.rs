@@ -436,4 +436,12 @@ mod tests {
         let cli_err: CliError = err.into();
         assert_eq!(cli_err.exit_code(), 1);
     }
+
+    #[test]
+    fn io_error_converts_to_cli_error_exit_1() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::NotFound, "file missing");
+        let err = CodegenError::Io(io_err);
+        let cli_err: CliError = err.into();
+        assert_eq!(cli_err.exit_code(), 1);
+    }
 }
