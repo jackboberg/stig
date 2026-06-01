@@ -247,7 +247,7 @@ fn extract_in_list_values(
 fn detect_rowid_alias(columns: &[ColumnInfo], sql: Option<&str>) -> Option<String> {
     if let Some(sql) = sql {
         let upper = sql.to_uppercase();
-        if upper.contains("WITHOUT ROWID") || upper.contains("WITHOUTROWID") {
+        if upper.contains("WITHOUT ROWID") {
             return None;
         }
     }
