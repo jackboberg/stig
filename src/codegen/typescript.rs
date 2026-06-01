@@ -8,6 +8,9 @@ use std::collections::BTreeMap;
 use std::fs;
 
 use rusqlite::Connection;
+use sqlparser::ast::{Expr, Statement, TableConstraint, Value};
+use sqlparser::dialect::SQLiteDialect;
+use sqlparser::parser::Parser;
 use tracing::warn;
 
 use super::{CodegenConfig, CodegenError, CodegenTarget, GenerateOutput};
@@ -148,135 +151,88 @@ fn extract_enums(sql: Option<&str>) -> BTreeMap<String, Vec<String>> {
         None => return BTreeMap::new(),
     };
 
-    let normalized = normalize_whitespace(sql);
+    let stmts = match Parser::parse_sql(&SQLiteDialect {}, sql) {
+        Ok(stmts) => stmts,
+        Err(_) => return BTreeMap::new(),
+    };
+
     let mut enums = BTreeMap::new();
-    let bytes = normalized.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
 
-    while i < len {
-        // Look for "CHECK" (case-insensitive)
-        if i + 5 <= len
-            && bytes[i].eq_ignore_ascii_case(&b'C')
-            && bytes[i + 1].eq_ignore_ascii_case(&b'H')
-            && bytes[i + 2].eq_ignore_ascii_case(&b'E')
-            && bytes[i + 3].eq_ignore_ascii_case(&b'C')
-            && bytes[i + 4].eq_ignore_ascii_case(&b'K')
-        {
-            i += 5;
+    for stmt in &stmts {
+        let Statement::CreateTable(create) = stmt else {
+            continue;
+        };
 
-            // Skip whitespace and '('
-            i = skip_ws(bytes, i);
-            if i >= len || bytes[i] != b'(' {
-                continue;
-            }
-            i += 1;
-            i = skip_ws(bytes, i);
-
-            // Read column name (possibly quoted with " or `)
-            let col = if i < len && (bytes[i] == b'"' || bytes[i] == b'`') {
-                let quote = bytes[i];
-                i += 1;
-                let start = i;
-                while i < len && bytes[i] != quote {
-                    i += 1;
-                }
-                let c = normalized[start..i].to_string();
-                if i < len {
-                    i += 1;
-                }
-                c
-            } else {
-                let start = i;
-                while i < len && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-                    i += 1;
-                }
-                normalized[start..i].to_string()
-            };
-
-            i = skip_ws(bytes, i);
-
-            // Expect "IN"
-            if i + 2 > len
-                || !bytes[i].eq_ignore_ascii_case(&b'I')
-                || !bytes[i + 1].eq_ignore_ascii_case(&b'N')
+        // Check table-level constraints.
+        for constraint in &create.constraints {
+            if let Some((col, values)) = extract_in_list_from_check(constraint)
+                && !values.is_empty()
             {
-                continue;
-            }
-            i += 2;
-            i = skip_ws(bytes, i);
-
-            // Expect '('
-            if i >= len || bytes[i] != b'(' {
-                continue;
-            }
-            i += 1;
-
-            // Read values until ')'
-            let val_start = i;
-            while i < len && bytes[i] != b')' {
-                i += 1;
-            }
-            let val_str = &normalized[val_start..i];
-
-            let values = extract_string_literals(val_str);
-            if !values.is_empty() {
                 enums.insert(col, values);
             }
-        } else {
-            i += 1;
+        }
+
+        // Check column-level constraints.
+        for col_def in &create.columns {
+            for opt_def in &col_def.options {
+                if let sqlparser::ast::ColumnOption::Check(check) = &opt_def.option
+                    && let Some((col, values)) = extract_in_list_values(check)
+                    && !values.is_empty()
+                {
+                    enums.insert(col, values);
+                }
+            }
         }
     }
 
     enums
 }
 
-/// Extract single-quoted string literal contents from `s`.
-///
-/// Handles SQL escaped single quotes (`''` → `'`).
-fn extract_string_literals(s: &str) -> Vec<String> {
-    let mut values = Vec::new();
-    let bytes = s.as_bytes();
-    let len = bytes.len();
-    let mut i = 0;
-
-    while i < len {
-        if bytes[i] == b'\'' {
-            i += 1;
-            let start = i;
-            while i < len {
-                if bytes[i] == b'\'' {
-                    if i + 1 < len && bytes[i + 1] == b'\'' {
-                        i += 2; // skip escaped quote pair
-                    } else {
-                        break; // end of string literal
-                    }
-                } else {
-                    i += 1;
-                }
-            }
-            values.push(s[start..i].replace("''", "'"));
-            if i < len {
-                i += 1;
-            }
-        } else {
-            i += 1;
-        }
-    }
-
-    values
+/// Try to extract an IN-list from a table-level CHECK constraint.
+fn extract_in_list_from_check(constraint: &TableConstraint) -> Option<(String, Vec<String>)> {
+    let TableConstraint::Check(check) = constraint else {
+        return None;
+    };
+    extract_in_list_values(check)
 }
 
-/// Collapse runs of whitespace into single spaces and trim.
-fn normalize_whitespace(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
-}
+/// Try to extract column name and string literal values from a CHECK constraint
+/// containing a simple `col IN ('a', 'b')` expression.
+fn extract_in_list_values(
+    check: &sqlparser::ast::CheckConstraint,
+) -> Option<(String, Vec<String>)> {
+    let Expr::InList {
+        expr: box_expr,
+        list,
+        negated: false,
+    } = check.expr.as_ref()
+    else {
+        return None;
+    };
 
-fn skip_ws(bytes: &[u8], mut i: usize) -> usize {
-    while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-        i += 1;
+    // Extract column name from identifier (possibly quoted).
+    let col = match box_expr.as_ref() {
+        Expr::Identifier(ident) => ident.value.clone(),
+        _ => return None,
+    };
+
+    // Extract string literal values.
+    let values: Vec<String> = list
+        .iter()
+        .filter_map(|e| match e {
+            Expr::Value(vws) => match &vws.value {
+                Value::SingleQuotedString(s) => Some(s.clone()),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+
+    if values.is_empty() {
+        None
+    } else {
+        Some((col, values))
     }
-    i
 }
 
 // ---------------------------------------------------------------------------
@@ -553,14 +509,6 @@ mod tests {
     }
 
     #[test]
-    fn normalize_whitespace_collapses_runs() {
-        assert_eq!(
-            normalize_whitespace("  hello   world  \n\t foo  "),
-            "hello world foo"
-        );
-    }
-
-    #[test]
     fn extract_enums_simple() {
         let sql = "CREATE TABLE posts (type TEXT CHECK (type IN ('entry', 'event')))";
         let enums = extract_enums(Some(sql));
@@ -591,6 +539,16 @@ mod tests {
     fn extract_enums_none_sql() {
         let enums = extract_enums(None);
         assert!(enums.is_empty());
+    }
+
+    #[test]
+    fn extract_enums_escaped_quotes() {
+        let sql = "CREATE TABLE t (status TEXT CHECK (status IN ('it''s', 'a''b''c')))";
+        let enums = extract_enums(Some(sql));
+        assert_eq!(
+            enums.get("status"),
+            Some(&vec!["it's".to_string(), "a'b'c".to_string()])
+        );
     }
 
     #[test]
@@ -661,23 +619,5 @@ mod tests {
         }];
         let sql = Some("CREATE TABLE t (id TEXT PRIMARY KEY)");
         assert_eq!(detect_rowid_alias(&cols, sql), None);
-    }
-
-    #[test]
-    fn extract_string_literals_basic() {
-        let values = extract_string_literals("'entry', 'event'");
-        assert_eq!(values, vec!["entry", "event"]);
-    }
-
-    #[test]
-    fn extract_string_literals_no_spaces() {
-        let values = extract_string_literals("'a','b','c'");
-        assert_eq!(values, vec!["a", "b", "c"]);
-    }
-
-    #[test]
-    fn extract_string_literals_escaped_quotes() {
-        let values = extract_string_literals("'it''s', 'a''b''c'");
-        assert_eq!(values, vec!["it's", "a'b'c"]);
     }
 }
