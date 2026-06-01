@@ -115,13 +115,12 @@ fn list_tables(conn: &Connection) -> Result<Vec<TableEntry>, CodegenError> {
 }
 
 fn get_columns(conn: &Connection, table: &str) -> Result<Vec<ColumnInfo>, CodegenError> {
-    let sql = format!("PRAGMA table_info('{table}')");
     let mut stmt = conn
-        .prepare(&sql)
+        .prepare("SELECT * FROM pragma_table_info(?)")
         .map_err(|e| CodegenError::Target(e.to_string()))?;
 
     let columns = stmt
-        .query_map([], |row| {
+        .query_map([table], |row| {
             Ok(ColumnInfo {
                 name: row.get(1)?,
                 declared_type: row.get::<_, Option<String>>(2)?.unwrap_or_default(),
