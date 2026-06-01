@@ -327,8 +327,10 @@ fn ts_type_for_column(col: &ColumnInfo, table_name: &str) -> String {
         .to_uppercase();
 
     match base.as_str() {
-        "INTEGER" | "INT" | "BIGINT" | "SMALLINT" | "TINYINT" | "MEDIUMINT" | "REAL" | "DOUBLE"
-        | "FLOAT" | "NUMERIC" | "DECIMAL" => "number".to_string(),
+        "INTEGER" | "INT" | "BIGINT" | "SMALLINT" | "TINYINT" | "MEDIUMINT" | "INT2" | "INT8"
+        | "BOOLEAN" | "BOOL" | "REAL" | "DOUBLE" | "FLOAT" | "NUMERIC" | "DECIMAL" => {
+            "number".to_string()
+        }
 
         "TEXT" | "VARCHAR" | "CHAR" | "CLOB" | "DATE" | "DATETIME" | "TIME" => "string".to_string(),
 
