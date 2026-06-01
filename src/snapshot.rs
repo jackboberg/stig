@@ -22,6 +22,7 @@
 //! internally consistent (all WAL data flushed into the main file).
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
@@ -138,6 +139,47 @@ pub fn restore_snapshot(version: &str, db_path: &Path, snapshots_dir: &Path) -> 
 /// Return `true` if `snapshots_dir/pre-<version>.db` exists.
 pub fn snapshot_exists(version: &str, snapshots_dir: &Path) -> bool {
     snapshots_dir.join(format!("pre-{version}.db")).exists()
+}
+
+/// Metadata for a single backup file (snapshot or reset).
+pub struct BackupEntry {
+    pub filename: String,
+    pub size_bytes: u64,
+    pub age: Duration,
+}
+
+/// List all `<prefix>*.db` files in `dir`, returning metadata sorted
+/// oldest-first.  Returns an empty vec if `dir` does not exist.
+pub fn list_backups(dir: &Path, prefix: &str) -> Result<Vec<BackupEntry>> {
+    if !dir.is_dir() {
+        return Ok(Vec::new());
+    }
+
+    let now = std::time::SystemTime::now();
+
+    let mut entries: Vec<BackupEntry> = std::fs::read_dir(dir)
+        .with_context(|| format!("failed to read directory {}", dir.display()))?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with(prefix) && name.ends_with(".db") {
+                let meta = entry.metadata().ok()?;
+                let mtime = meta.modified().ok()?;
+                let age = now.duration_since(mtime).unwrap_or(Duration::ZERO);
+                Some(BackupEntry {
+                    filename: name.into_owned(),
+                    size_bytes: meta.len(),
+                    age,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    entries.sort_by_key(|b| std::cmp::Reverse(b.age));
+    Ok(entries)
 }
 
 /// Delete the oldest `pre-*.db` snapshots (plus their sidecars) in

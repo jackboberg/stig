@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand};
+use stig::cli::BackupsCommand;
 use stig::errors::CliError;
 
 #[derive(Debug, Parser)]
@@ -48,7 +49,10 @@ enum Command {
         target_name: Option<String>,
     },
     /// Manage database backups/snapshots.
-    Backups,
+    Backups {
+        #[command(subcommand)]
+        command: BackupsCommand,
+    },
 }
 
 fn main() {
@@ -65,7 +69,7 @@ fn main() {
         Command::Redo { version, yes } => stig::cli::redo::run(version, yes),
         Command::Reset { yes } => stig::cli::reset::run(yes),
         Command::Generate { target_name } => stig::cli::generate::run(target_name),
-        Command::Backups => stig::cli::backups::run(),
+        Command::Backups { command } => stig::cli::backups::run(command),
     };
 
     if let Err(e) = result {
