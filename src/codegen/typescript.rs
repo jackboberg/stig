@@ -232,6 +232,8 @@ fn extract_enums(sql: Option<&str>) -> BTreeMap<String, Vec<String>> {
 }
 
 /// Extract single-quoted string literal contents from `s`.
+///
+/// Handles SQL escaped single quotes (`''` → `'`).
 fn extract_string_literals(s: &str) -> Vec<String> {
     let mut values = Vec::new();
     let bytes = s.as_bytes();
@@ -242,10 +244,18 @@ fn extract_string_literals(s: &str) -> Vec<String> {
         if bytes[i] == b'\'' {
             i += 1;
             let start = i;
-            while i < len && bytes[i] != b'\'' {
-                i += 1;
+            while i < len {
+                if bytes[i] == b'\'' {
+                    if i + 1 < len && bytes[i + 1] == b'\'' {
+                        i += 2; // skip escaped quote pair
+                    } else {
+                        break; // end of string literal
+                    }
+                } else {
+                    i += 1;
+                }
             }
-            values.push(s[start..i].to_string());
+            values.push(s[start..i].replace("''", "'"));
             if i < len {
                 i += 1;
             }
@@ -663,5 +673,11 @@ mod tests {
     fn extract_string_literals_no_spaces() {
         let values = extract_string_literals("'a','b','c'");
         assert_eq!(values, vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn extract_string_literals_escaped_quotes() {
+        let values = extract_string_literals("'it''s', 'a''b''c'");
+        assert_eq!(values, vec!["it's", "a'b'c"]);
     }
 }
