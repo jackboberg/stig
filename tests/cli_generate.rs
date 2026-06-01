@@ -90,3 +90,34 @@ fn generate_no_targets_configured() {
     // No [[generate]] entries — should succeed silently.
     stig_cmd(&dir).arg("generate").assert().success();
 }
+
+#[test]
+fn generate_unknown_target_exits_4() {
+    let dir = TempDir::new().unwrap();
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_items",
+        "CREATE TABLE items (id INTEGER PRIMARY KEY, label TEXT NOT NULL);",
+    );
+
+    stig_cmd(&dir).arg("migrate").assert().success();
+
+    let toml = r#"
+migrations_dir = "db/migrations"
+database_path  = "app.db"
+
+[[generate]]
+kind = "typescript"
+path = "types.ts"
+"#;
+    std::fs::write(dir.path().join("stig.toml"), toml).unwrap();
+
+    stig_cmd(&dir)
+        .args(["generate", "nonexistent"])
+        .assert()
+        .failure()
+        .code(4);
+}

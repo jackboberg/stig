@@ -4,6 +4,7 @@ use tracing::info;
 use crate::codegen;
 use crate::config::Config;
 use crate::db::Db;
+use crate::errors::CliError;
 
 /// Run `stig generate [target-name]`.
 pub fn run(target_name: Option<String>) -> Result<()> {
@@ -23,7 +24,8 @@ pub fn run(target_name: Option<String>) -> Result<()> {
         &config.generate,
         &config.project_root,
         filter,
-    )?;
+    )
+    .map_err(|e| -> CliError { e.into() })?;
 
     for output in &outputs {
         let display_path = output
