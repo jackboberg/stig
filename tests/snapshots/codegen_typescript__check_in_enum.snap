@@ -7,29 +7,29 @@ expression: output
 // Source: 1 tables, 2 enums.
 
 export type Enums = {
-  posts_subtype: "note" | "article" | "photo";
-  posts_type: "entry" | "event";
+  "posts_subtype": "note" | "article" | "photo";
+  "posts_type": "entry" | "event";
 };
 
 export type Tables = {
   "posts": {
     Row: {
-      id: number | null;
-      title: string;
-      type: Enums.posts_type;
-      subtype: Enums.posts_subtype | null;
+      "id": number | null;
+      "title": string;
+      "type": Enums["posts_type"];
+      "subtype": Enums["posts_subtype"] | null;
     };
     Insert: {
-      id?: number | null;
-      title: string;
-      type: Enums.posts_type;
-      subtype?: Enums.posts_subtype | null;
+      "id"?: number | null;
+      "title": string;
+      "type": Enums["posts_type"];
+      "subtype"?: Enums["posts_subtype"] | null;
     };
     Update: {
-      id?: number | null;
-      title?: string;
-      type?: Enums.posts_type;
-      subtype?: Enums.posts_subtype | null;
+      "id"?: number | null;
+      "title"?: string;
+      "type"?: Enums["posts_type"];
+      "subtype"?: Enums["posts_subtype"] | null;
     };
   };
 };

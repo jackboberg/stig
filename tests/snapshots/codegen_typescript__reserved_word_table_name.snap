@@ -9,16 +9,16 @@ expression: output
 export type Tables = {
   "references": {
     Row: {
-      id: number | null;
-      url: string;
+      "id": number | null;
+      "url": string;
     };
     Insert: {
-      id?: number | null;
-      url: string;
+      "id"?: number | null;
+      "url": string;
     };
     Update: {
-      id?: number | null;
-      url?: string;
+      "id"?: number | null;
+      "url"?: string;
     };
   };
 };

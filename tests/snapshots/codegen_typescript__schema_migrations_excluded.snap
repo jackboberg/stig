@@ -9,16 +9,16 @@ expression: output
 export type Tables = {
   "users": {
     Row: {
-      id: number | null;
-      name: string | null;
+      "id": number | null;
+      "name": string | null;
     };
     Insert: {
-      id?: number | null;
-      name?: string | null;
+      "id"?: number | null;
+      "name"?: string | null;
     };
     Update: {
-      id?: number | null;
-      name?: string | null;
+      "id"?: number | null;
+      "name"?: string | null;
     };
   };
 };

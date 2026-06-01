@@ -9,16 +9,16 @@ expression: output
 export type Tables = {
   "tags": {
     Row: {
-      slug: string;
-      name: string;
+      "slug": string;
+      "name": string;
     };
     Insert: {
-      slug: string;
-      name: string;
+      "slug": string;
+      "name": string;
     };
     Update: {
-      slug?: string;
-      name?: string;
+      "slug"?: string;
+      "name"?: string;
     };
   };
 };

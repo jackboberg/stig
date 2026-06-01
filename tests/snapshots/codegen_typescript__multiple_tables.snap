@@ -7,65 +7,65 @@ expression: output
 // Source: 3 tables, 1 enums.
 
 export type Enums = {
-  posts_status: "draft" | "published" | "archived";
+  "posts_status": "draft" | "published" | "archived";
 };
 
 export type Tables = {
   "categories": {
     Row: {
-      id: number | null;
-      name: string;
+      "id": number | null;
+      "name": string;
     };
     Insert: {
-      id?: number | null;
-      name: string;
+      "id"?: number | null;
+      "name": string;
     };
     Update: {
-      id?: number | null;
-      name?: string;
+      "id"?: number | null;
+      "name"?: string;
     };
   };
   "comments": {
     Row: {
-      id: number | null;
-      post_id: number;
-      author: string | null;
-      body: string;
+      "id": number | null;
+      "post_id": number;
+      "author": string | null;
+      "body": string;
     };
     Insert: {
-      id?: number | null;
-      post_id: number;
-      author?: string | null;
-      body: string;
+      "id"?: number | null;
+      "post_id": number;
+      "author"?: string | null;
+      "body": string;
     };
     Update: {
-      id?: number | null;
-      post_id?: number;
-      author?: string | null;
-      body?: string;
+      "id"?: number | null;
+      "post_id"?: number;
+      "author"?: string | null;
+      "body"?: string;
     };
   };
   "posts": {
     Row: {
-      id: number | null;
-      category_id: number | null;
-      title: string;
-      body: string | null;
-      status: Enums.posts_status;
+      "id": number | null;
+      "category_id": number | null;
+      "title": string;
+      "body": string | null;
+      "status": Enums["posts_status"];
     };
     Insert: {
-      id?: number | null;
-      category_id?: number | null;
-      title: string;
-      body?: string | null;
-      status: Enums.posts_status;
+      "id"?: number | null;
+      "category_id"?: number | null;
+      "title": string;
+      "body"?: string | null;
+      "status": Enums["posts_status"];
     };
     Update: {
-      id?: number | null;
-      category_id?: number | null;
-      title?: string;
-      body?: string | null;
-      status?: Enums.posts_status;
+      "id"?: number | null;
+      "category_id"?: number | null;
+      "title"?: string;
+      "body"?: string | null;
+      "status"?: Enums["posts_status"];
     };
   };
 };

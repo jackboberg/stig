@@ -9,25 +9,25 @@ expression: output
 export type Tables = {
   "items": {
     Row: {
-      id: number | null;
-      name: string;
-      email: string | null;
-      score: number | null;
-      status: string;
+      "id": number | null;
+      "name": string;
+      "email": string | null;
+      "score": number | null;
+      "status": string;
     };
     Insert: {
-      id?: number | null;
-      name: string;
-      email?: string | null;
-      score?: number | null;
-      status?: string;
+      "id"?: number | null;
+      "name": string;
+      "email"?: string | null;
+      "score"?: number | null;
+      "status"?: string;
     };
     Update: {
-      id?: number | null;
-      name?: string;
-      email?: string | null;
-      score?: number | null;
-      status?: string;
+      "id"?: number | null;
+      "name"?: string;
+      "email"?: string | null;
+      "score"?: number | null;
+      "status"?: string;
     };
   };
 };

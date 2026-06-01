@@ -9,16 +9,16 @@ expression: output
 export type Tables = {
   "kv": {
     Row: {
-      key: string;
-      value: string;
+      "key": string;
+      "value": string;
     };
     Insert: {
-      key: string;
-      value: string;
+      "key": string;
+      "value": string;
     };
     Update: {
-      key?: string;
-      value?: string;
+      "key"?: string;
+      "value"?: string;
     };
   };
 };

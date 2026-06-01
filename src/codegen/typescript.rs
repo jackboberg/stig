@@ -382,7 +382,8 @@ fn render(table_infos: &[TableInfo], all_enums: &BTreeMap<String, Vec<String>>) 
                 .map(|v| format!("\"{v}\""))
                 .collect::<Vec<_>>()
                 .join(" | ");
-            out.push_str(&format!("  {name}: {union};\n"));
+            let escaped_name = name.replace('"', "\\\"");
+            out.push_str(&format!("  \"{escaped_name}\": {union};\n"));
         }
         out.push_str("};\n\n");
     }
@@ -397,7 +398,8 @@ fn render(table_infos: &[TableInfo], all_enums: &BTreeMap<String, Vec<String>>) 
         for col in &table.columns {
             let base = column_type(col, &table.name, all_enums);
             let nullable = nullable_suffix(col, table);
-            out.push_str(&format!("      {}: {base}{nullable};\n", col.name));
+            let escaped = col.name.replace('"', "\\\"");
+            out.push_str(&format!("      \"{escaped}\": {base}{nullable};\n"));
         }
         out.push_str("    };\n");
 
@@ -407,9 +409,9 @@ fn render(table_infos: &[TableInfo], all_enums: &BTreeMap<String, Vec<String>>) 
             let base = column_type(col, &table.name, all_enums);
             let nullable = nullable_suffix(col, table);
             let optional = insert_optional(col, table);
+            let escaped = col.name.replace('"', "\\\"");
             out.push_str(&format!(
-                "      {}{}: {base}{nullable};\n",
-                col.name, optional
+                "      \"{escaped}\"{optional}: {base}{nullable};\n",
             ));
         }
         out.push_str("    };\n");
@@ -419,7 +421,8 @@ fn render(table_infos: &[TableInfo], all_enums: &BTreeMap<String, Vec<String>>) 
         for col in &table.columns {
             let base = column_type(col, &table.name, all_enums);
             let nullable = nullable_suffix(col, table);
-            out.push_str(&format!("      {}?: {base}{nullable};\n", col.name));
+            let escaped = col.name.replace('"', "\\\"");
+            out.push_str(&format!("      \"{escaped}\"?: {base}{nullable};\n"));
         }
         out.push_str("    };\n");
 
@@ -436,7 +439,7 @@ fn render(table_infos: &[TableInfo], all_enums: &BTreeMap<String, Vec<String>>) 
     out
 }
 
-/// Return `Enums.<table>_<col>` if the column has a CHECK-IN constraint,
+/// Return `Enums["<table>_<col>"]` if the column has a CHECK-IN constraint,
 /// otherwise the affinity-mapped TS type.
 fn column_type(
     col: &ColumnInfo,
@@ -445,7 +448,8 @@ fn column_type(
 ) -> String {
     let enum_key = format!("{table_name}_{}", col.name);
     if enums.contains_key(&enum_key) {
-        return format!("Enums.{enum_key}");
+        let escaped = enum_key.replace('"', "\\\"");
+        return format!("Enums[\"{escaped}\"]");
     }
     ts_type_for_column(col, table_name)
 }
