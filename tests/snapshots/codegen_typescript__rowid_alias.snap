@@ -9,17 +9,17 @@ expression: output
 export type Tables = {
   "users": {
     Row: {
-      "id": number | null;
+      "id": number;
       "name": string;
       "email": string;
     };
     Insert: {
-      "id"?: number | null;
+      "id"?: number;
       "name": string;
       "email": string;
     };
     Update: {
-      "id"?: number | null;
+      "id"?: number;
       "name"?: string;
       "email"?: string;
     };

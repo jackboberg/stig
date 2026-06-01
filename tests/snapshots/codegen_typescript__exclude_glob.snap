@@ -9,15 +9,15 @@ expression: output
 export type Tables = {
   "users": {
     Row: {
-      "id": number | null;
+      "id": number;
       "name": string | null;
     };
     Insert: {
-      "id"?: number | null;
+      "id"?: number;
       "name"?: string | null;
     };
     Update: {
-      "id"?: number | null;
+      "id"?: number;
       "name"?: string | null;
     };
   };

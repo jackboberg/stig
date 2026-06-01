@@ -13,33 +13,33 @@ export type Enums = {
 export type Tables = {
   "categories": {
     Row: {
-      "id": number | null;
+      "id": number;
       "name": string;
     };
     Insert: {
-      "id"?: number | null;
+      "id"?: number;
       "name": string;
     };
     Update: {
-      "id"?: number | null;
+      "id"?: number;
       "name"?: string;
     };
   };
   "comments": {
     Row: {
-      "id": number | null;
+      "id": number;
       "post_id": number;
       "author": string | null;
       "body": string;
     };
     Insert: {
-      "id"?: number | null;
+      "id"?: number;
       "post_id": number;
       "author"?: string | null;
       "body": string;
     };
     Update: {
-      "id"?: number | null;
+      "id"?: number;
       "post_id"?: number;
       "author"?: string | null;
       "body"?: string;
@@ -47,21 +47,21 @@ export type Tables = {
   };
   "posts": {
     Row: {
-      "id": number | null;
+      "id": number;
       "category_id": number | null;
       "title": string;
       "body": string | null;
       "status": Enums["posts_status"];
     };
     Insert: {
-      "id"?: number | null;
+      "id"?: number;
       "category_id"?: number | null;
       "title": string;
       "body"?: string | null;
       "status": Enums["posts_status"];
     };
     Update: {
-      "id"?: number | null;
+      "id"?: number;
       "category_id"?: number | null;
       "title"?: string;
       "body"?: string | null;

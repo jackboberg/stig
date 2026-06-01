@@ -45,7 +45,7 @@ path = "lib/database/types.ts"
     let contents = std::fs::read_to_string(&ts_path).unwrap();
     assert!(contents.contains("export type Tables"));
     assert!(contents.contains("\"users\""));
-    assert!(contents.contains("\"id\": number | null"));
+    assert!(contents.contains("\"id\": number"));
     assert!(contents.contains("\"name\": string"));
 }
 

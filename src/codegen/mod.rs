@@ -70,7 +70,6 @@ pub struct CodegenConfig {
 pub struct GenerateOutput {
     pub path: PathBuf,
     pub bytes_written: u64,
-    pub formatted: bool,
 }
 
 /// Trait implemented by each codegen target.
@@ -165,12 +164,10 @@ pub fn run_targets(
 
         let output = target.generate(conn, &config)?;
 
-        let suffix = if output.formatted { " (formatted)" } else { "" };
         tracing::info!(
-            "generated {} ({} bytes){}",
+            "generated {} ({} bytes)",
             output.path.display(),
             output.bytes_written,
-            suffix
         );
 
         outputs.push(output);
@@ -203,7 +200,6 @@ mod tests {
             Ok(GenerateOutput {
                 path: config.path.clone(),
                 bytes_written: 0,
-                formatted: false,
             })
         }
     }
@@ -246,7 +242,6 @@ mod tests {
         let output = target.generate(&conn, &config).unwrap();
         assert_eq!(output.path, dir.path().join("out/noop.txt"));
         assert_eq!(output.bytes_written, 0);
-        assert!(!output.formatted);
     }
 
     // -----------------------------------------------------------------------

@@ -9,15 +9,15 @@ expression: output
 export type Tables = {
   "references": {
     Row: {
-      "id": number | null;
+      "id": number;
       "url": string;
     };
     Insert: {
-      "id"?: number | null;
+      "id"?: number;
       "url": string;
     };
     Update: {
-      "id"?: number | null;
+      "id"?: number;
       "url"?: string;
     };
   };

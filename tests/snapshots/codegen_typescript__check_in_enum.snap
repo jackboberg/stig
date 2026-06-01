@@ -14,19 +14,19 @@ export type Enums = {
 export type Tables = {
   "posts": {
     Row: {
-      "id": number | null;
+      "id": number;
       "title": string;
       "type": Enums["posts_type"];
       "subtype": Enums["posts_subtype"] | null;
     };
     Insert: {
-      "id"?: number | null;
+      "id"?: number;
       "title": string;
       "type": Enums["posts_type"];
       "subtype"?: Enums["posts_subtype"] | null;
     };
     Update: {
-      "id"?: number | null;
+      "id"?: number;
       "title"?: string;
       "type"?: Enums["posts_type"];
       "subtype"?: Enums["posts_subtype"] | null;

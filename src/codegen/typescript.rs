@@ -66,7 +66,6 @@ impl CodegenTarget for TypeScriptTarget {
         Ok(GenerateOutput {
             path: config.path.clone(),
             bytes_written: output.len() as u64,
-            formatted: false,
         })
     }
 }
@@ -242,7 +241,7 @@ fn extract_in_list_values(
 /// Detect whether the table has an `INTEGER PRIMARY KEY` rowid alias.
 ///
 /// Returns the alias column name if:
-/// - Exactly one column has `pk = 1` and declared type contains `INT`.
+/// - Exactly one column has `pk = 1` and declared type is exactly `INTEGER`.
 /// - The CREATE TABLE statement does NOT contain `WITHOUT ROWID`.
 fn detect_rowid_alias(columns: &[ColumnInfo], sql: Option<&str>) -> Option<String> {
     if let Some(sql) = sql {
@@ -258,7 +257,7 @@ fn detect_rowid_alias(columns: &[ColumnInfo], sql: Option<&str>) -> Option<Strin
     }
 
     let col = pk_cols[0];
-    if col.declared_type.to_uppercase().contains("INT") {
+    if col.declared_type.to_uppercase() == "INTEGER" {
         Some(col.name.clone())
     } else {
         None
@@ -270,7 +269,13 @@ fn detect_rowid_alias(columns: &[ColumnInfo], sql: Option<&str>) -> Option<Strin
 // ---------------------------------------------------------------------------
 
 fn is_excluded(name: &str, exclude: &[String]) -> bool {
-    exclude.iter().any(|pattern| like_match(pattern, name))
+    // Internal exclusions per SPEC §7.5: always exclude sqlite_ system
+    // tables and the schema_migrations tracking table.
+    const INTERNAL_EXCLUDE: &[&str] = &["sqlite_%", "schema_migrations"];
+    INTERNAL_EXCLUDE
+        .iter()
+        .any(|pattern| like_match(pattern, name))
+        || exclude.iter().any(|pattern| like_match(pattern, name))
 }
 
 /// SQL `LIKE`-style matching with `%` (any sequence) and `_` (single char).
@@ -379,7 +384,10 @@ fn render(table_infos: &[TableInfo], all_enums: &BTreeMap<String, Vec<String>>) 
         for (name, values) in all_enums {
             let union = values
                 .iter()
-                .map(|v| format!("\"{v}\""))
+                .map(|v| {
+                    let escaped = v.replace('\\', "\\\\").replace('"', "\\\"");
+                    format!("\"{escaped}\"")
+                })
                 .collect::<Vec<_>>()
                 .join(" | ");
             let escaped_name = name.replace('"', "\\\"");
@@ -391,7 +399,8 @@ fn render(table_infos: &[TableInfo], all_enums: &BTreeMap<String, Vec<String>>) 
     // Tables
     out.push_str("export type Tables = {\n");
     for table in table_infos {
-        out.push_str(&format!("  \"{}\": {{\n", table.name));
+        let escaped_table = table.name.replace('"', "\\\"");
+        out.push_str(&format!("  \"{escaped_table}\": {{\n"));
 
         // Row
         out.push_str("    Row: {\n");
@@ -460,13 +469,19 @@ fn column_type(
 /// - It has an explicit `NOT NULL` constraint, OR
 /// - It is a PRIMARY KEY column (`pk > 0`) that is NOT a rowid alias.
 ///   In SQLite, all PRIMARY KEY columns (except INTEGER PRIMARY KEY
-///   rowid aliases) are implicitly NOT NULL.
+///   rowid aliases) are implicitly NOT NULL, OR
+/// - It is an INTEGER PRIMARY KEY rowid alias — while NULL inserts are
+///   allowed (auto-assign), the value is never NULL in query results.
 fn is_effectively_notnull(col: &ColumnInfo, table: &TableInfo) -> bool {
     if col.notnull {
         return true;
     }
+    // Rowid aliases are never NULL in query results.
+    if table.rowid_alias.as_deref() == Some(&col.name) {
+        return true;
+    }
     // Non-rowid-alias PRIMARY KEY columns are implicitly NOT NULL.
-    col.pk > 0 && table.rowid_alias.as_deref() != Some(&col.name)
+    col.pk > 0
 }
 
 fn nullable_suffix(col: &ColumnInfo, table: &TableInfo) -> &'static str {
