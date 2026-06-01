@@ -366,6 +366,27 @@ fn ts_type_for_column(col: &ColumnInfo, table_name: &str) -> String {
 // Rendering
 // ---------------------------------------------------------------------------
 
+/// Escape a string for safe emission inside a TypeScript string literal.
+///
+/// Handles backslashes, double quotes, and ASCII control characters.
+fn escape_ts_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_ascii_control() => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn render(table_infos: &[TableInfo], all_enums: &BTreeMap<String, Vec<String>>) -> String {
     let mut out = String::new();
 
@@ -384,14 +405,10 @@ fn render(table_infos: &[TableInfo], all_enums: &BTreeMap<String, Vec<String>>) 
         for (name, values) in all_enums {
             let union = values
                 .iter()
-                .map(|v| {
-                    let escaped = v.replace('\\', "\\\\").replace('"', "\\\"");
-                    format!("\"{escaped}\"")
-                })
+                .map(|v| format!("\"{}\"", escape_ts_literal(v)))
                 .collect::<Vec<_>>()
                 .join(" | ");
-            let escaped_name = name.replace('"', "\\\"");
-            out.push_str(&format!("  \"{escaped_name}\": {union};\n"));
+            out.push_str(&format!("  \"{}\": {union};\n", escape_ts_literal(name)));
         }
         out.push_str("};\n\n");
     }
@@ -399,16 +416,17 @@ fn render(table_infos: &[TableInfo], all_enums: &BTreeMap<String, Vec<String>>) 
     // Tables
     out.push_str("export type Tables = {\n");
     for table in table_infos {
-        let escaped_table = table.name.replace('"', "\\\"");
-        out.push_str(&format!("  \"{escaped_table}\": {{\n"));
+        out.push_str(&format!("  \"{}\": {{\n", escape_ts_literal(&table.name)));
 
         // Row
         out.push_str("    Row: {\n");
         for col in &table.columns {
             let base = column_type(col, &table.name, all_enums);
             let nullable = nullable_suffix(col, table);
-            let escaped = col.name.replace('"', "\\\"");
-            out.push_str(&format!("      \"{escaped}\": {base}{nullable};\n"));
+            out.push_str(&format!(
+                "      \"{}\": {base}{nullable};\n",
+                escape_ts_literal(&col.name)
+            ));
         }
         out.push_str("    };\n");
 
@@ -418,9 +436,9 @@ fn render(table_infos: &[TableInfo], all_enums: &BTreeMap<String, Vec<String>>) 
             let base = column_type(col, &table.name, all_enums);
             let nullable = nullable_suffix(col, table);
             let optional = insert_optional(col, table);
-            let escaped = col.name.replace('"', "\\\"");
             out.push_str(&format!(
-                "      \"{escaped}\"{optional}: {base}{nullable};\n",
+                "      \"{}\"{optional}: {base}{nullable};\n",
+                escape_ts_literal(&col.name)
             ));
         }
         out.push_str("    };\n");
@@ -430,8 +448,10 @@ fn render(table_infos: &[TableInfo], all_enums: &BTreeMap<String, Vec<String>>) 
         for col in &table.columns {
             let base = column_type(col, &table.name, all_enums);
             let nullable = nullable_suffix(col, table);
-            let escaped = col.name.replace('"', "\\\"");
-            out.push_str(&format!("      \"{escaped}\"?: {base}{nullable};\n"));
+            out.push_str(&format!(
+                "      \"{}\"?: {base}{nullable};\n",
+                escape_ts_literal(&col.name)
+            ));
         }
         out.push_str("    };\n");
 
@@ -457,8 +477,7 @@ fn column_type(
 ) -> String {
     let enum_key = format!("{table_name}_{}", col.name);
     if enums.contains_key(&enum_key) {
-        let escaped = enum_key.replace('"', "\\\"");
-        return format!("Enums[\"{escaped}\"]");
+        return format!("Enums[\"{}\"]", escape_ts_literal(&enum_key));
     }
     ts_type_for_column(col, table_name)
 }
@@ -510,6 +529,26 @@ fn insert_optional(col: &ColumnInfo, table: &TableInfo) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escape_ts_literal_basic() {
+        assert_eq!(escape_ts_literal("hello"), "hello");
+        assert_eq!(escape_ts_literal("foo\"bar"), "foo\\\"bar");
+        assert_eq!(escape_ts_literal("foo\\bar"), "foo\\\\bar");
+    }
+
+    #[test]
+    fn escape_ts_literal_control_chars() {
+        assert_eq!(escape_ts_literal("a\nb\tc"), "a\\nb\\tc");
+        assert_eq!(escape_ts_literal("a\rb"), "a\\rb");
+        assert_eq!(escape_ts_literal("\x00"), "\\u0000");
+        assert_eq!(escape_ts_literal("\x1f"), "\\u001f");
+    }
+
+    #[test]
+    fn escape_ts_literal_combined() {
+        assert_eq!(escape_ts_literal("say \"hi\"\n"), "say \\\"hi\\\"\\n");
+    }
 
     #[test]
     fn like_match_basic() {
