@@ -119,7 +119,7 @@ fn list_tables(conn: &Connection) -> Result<Vec<TableEntry>, CodegenError> {
 fn get_columns(conn: &Connection, table: &str) -> Result<Vec<ColumnInfo>, CodegenError> {
     let mut stmt = conn
         .prepare("SELECT * FROM pragma_table_info(?)")
-        .map_err(|e| CodegenError::Target(e.to_string()))?;
+        .map_err(|e| CodegenError::Target(format!("failed to query columns for {table}: {e}")))?;
 
     let columns = stmt
         .query_map([table], |row| {
@@ -131,9 +131,9 @@ fn get_columns(conn: &Connection, table: &str) -> Result<Vec<ColumnInfo>, Codege
                 pk: row.get(5)?,
             })
         })
-        .map_err(|e| CodegenError::Target(e.to_string()))?
+        .map_err(|e| CodegenError::Target(format!("failed to read columns for {table}: {e}")))?
         .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| CodegenError::Target(e.to_string()))?;
+        .map_err(|e| CodegenError::Target(format!("failed to read column row for {table}: {e}")))?;
 
     Ok(columns)
 }
