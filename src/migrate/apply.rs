@@ -6,6 +6,7 @@ use tracing::warn;
 
 use crate::config::Config;
 use crate::db::Db;
+use crate::errors::CliError;
 use crate::sha256_hex;
 use crate::snapshot;
 
@@ -165,6 +166,23 @@ fn has_explicit_transaction(sql: &str) -> bool {
     false
 }
 
+/// Check whether a migration file contains any meaningful SQL statements.
+///
+/// Uses `sqlparser` to parse the content (after stripping the
+/// `stig: non-transactional` directive). Returns `true` when parsing
+/// succeeds and yields zero statements.
+///
+/// If the parser fails, returns `false` — we let SQLite's `execute_batch`
+/// surface the real error rather than rejecting possibly-valid SQL that
+/// `sqlparser` does not understand.
+fn is_empty_migration(content: &str) -> bool {
+    let sql = strip_directive(content);
+    match sqlparser::parser::Parser::parse_sql(&sqlparser::dialect::SQLiteDialect {}, &sql) {
+        Ok(stmts) => stmts.is_empty(),
+        Err(_) => false,
+    }
+}
+
 /// Apply all pending migrations from `plan` against `db`.
 ///
 /// For each pending migration:
@@ -194,6 +212,13 @@ pub fn apply_pending(db: &Db, plan: &Plan, config: &Config, dry_run: bool) -> Re
 
         let content = std::fs::read_to_string(&file.path)
             .with_context(|| format!("failed to read {}", file.path.display()))?;
+
+        if is_empty_migration(&content) {
+            return Err(CliError::Usage(format!(
+                "migration {filename} contains no SQL statements"
+            ))
+            .into());
+        }
 
         if can_snapshot && !dry_run {
             db.checkpoint()?;
@@ -523,5 +548,81 @@ mod tests {
     #[test]
     fn has_explicit_transaction_returns_false_for_empty() {
         assert!(!has_explicit_transaction(""));
+    }
+
+    // -----------------------------------------------------------------------
+    // is_empty_migration tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn is_empty_migration_empty_string() {
+        assert!(is_empty_migration(""));
+    }
+
+    #[test]
+    fn is_empty_migration_whitespace_only() {
+        assert!(is_empty_migration("   \n\n  \t  \n"));
+    }
+
+    #[test]
+    fn is_empty_migration_comments_only() {
+        assert!(is_empty_migration(
+            "-- just a comment\n-- another comment\n"
+        ));
+    }
+
+    #[test]
+    fn is_empty_migration_block_comments_only() {
+        assert!(is_empty_migration("/* block comment */\n/* another */\n"));
+    }
+
+    #[test]
+    fn is_empty_migration_directive_only() {
+        assert!(is_empty_migration("stig: non-transactional\n"));
+    }
+
+    #[test]
+    fn is_empty_migration_directive_and_comments() {
+        assert!(is_empty_migration("-- header\nstig: non-transactional\n\n"));
+    }
+
+    #[test]
+    fn is_empty_migration_with_select() {
+        assert!(!is_empty_migration("SELECT 1;"));
+    }
+
+    #[test]
+    fn is_empty_migration_with_create_table() {
+        assert!(!is_empty_migration(
+            "CREATE TABLE x (id INTEGER PRIMARY KEY);"
+        ));
+    }
+
+    #[test]
+    fn is_empty_migration_with_insert() {
+        assert!(!is_empty_migration("INSERT INTO x VALUES (1);"));
+    }
+
+    #[test]
+    fn is_empty_migration_with_pragma() {
+        assert!(!is_empty_migration("PRAGMA journal_mode = WAL;"));
+    }
+
+    #[test]
+    fn is_empty_migration_with_vacuum() {
+        assert!(!is_empty_migration("VACUUM;"));
+    }
+
+    #[test]
+    fn is_empty_migration_non_tx_with_sql() {
+        assert!(!is_empty_migration(
+            "stig: non-transactional\nCREATE TABLE x (id INTEGER);\n"
+        ));
+    }
+
+    #[test]
+    fn is_empty_migration_invalid_sql_allowed() {
+        // sqlparser may not understand all SQLite syntax; we defer to SQLite.
+        assert!(!is_empty_migration("this is not valid sql at all"));
     }
 }
