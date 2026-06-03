@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use rusqlite::params;
@@ -13,7 +13,7 @@ use crate::errors::CliError;
 use crate::sha256_hex;
 use crate::snapshot;
 
-use super::plan::Plan;
+use super::plan::{Plan, PlannedMigration};
 
 fn resolve_db_path(config: &Config) -> PathBuf {
     config.resolve_path(&config.database_path)
@@ -191,6 +191,142 @@ fn has_explicit_transaction_stmts(stmts: &[Statement]) -> bool {
     })
 }
 
+/// Execute a non-transactional migration, restoring the pre-migration
+/// snapshot on failure when snapshots are available.
+fn execute_non_transactional(
+    db: &Db,
+    filename: &str,
+    version: &str,
+    sql: &str,
+    db_path: &Path,
+    snapshots_dir: &Path,
+    can_snapshot: bool,
+) -> Result<()> {
+    let exec_result = db
+        .connection()
+        .execute_batch(sql)
+        .with_context(|| format!("failed to execute {filename} ({version})"));
+
+    if let Err(e) = exec_result {
+        if can_snapshot && snapshot::snapshot_exists(version, snapshots_dir) {
+            if let Err(restore_err) = snapshot::restore_snapshot(version, db_path, snapshots_dir) {
+                return Err(anyhow::anyhow!(
+                    "migration {filename} ({version}) failed; \
+                     attempted to restore pre-migration snapshot but also failed: {restore_err}"
+                ));
+            }
+            return Err(anyhow::anyhow!(
+                "migration {filename} ({version}) failed; database restored to pre-migration state"
+            ));
+        }
+        return Err(e);
+    }
+    Ok(())
+}
+
+/// Execute a transactional migration wrapped in `BEGIN/COMMIT`.
+fn execute_transactional(db: &Db, filename: &str, version: &str, content: &str) -> Result<()> {
+    let sql = format!("BEGIN TRANSACTION;\n{content}\nCOMMIT;");
+    db.connection()
+        .execute_batch(&sql)
+        .with_context(|| format!("failed to execute {filename} ({version})"))
+}
+
+/// Record a successfully applied migration in `schema_migrations`.
+fn record_migration(db: &Db, version: &str, checksum: &str, filename: &str) -> Result<()> {
+    db.connection()
+        .execute(
+            "INSERT INTO schema_migrations (version, checksum) VALUES (?1, ?2)",
+            params![version, checksum],
+        )
+        .with_context(|| format!("failed to record {filename} ({version}) in schema_migrations"))
+        .map(|_| ())
+}
+
+/// Apply a single pending migration.  Returns `true` if the migration was
+/// actually applied (not a dry-run).
+fn apply_single_migration(
+    db: &Db,
+    entry: &PlannedMigration,
+    db_path: &Path,
+    snapshots_dir: &Path,
+    can_snapshot: bool,
+    dry_run: bool,
+) -> Result<bool> {
+    let version = &entry.version;
+    let file = entry.file.as_ref().context("pending entry has no file")?;
+
+    let filename = file
+        .path
+        .file_name()
+        .map(|s| s.to_string_lossy().to_string())
+        .unwrap_or_else(|| version.clone());
+
+    let content = std::fs::read_to_string(&file.path)
+        .with_context(|| format!("failed to read {}", file.path.display()))?;
+
+    let stmts = parse_sql_statements(&content);
+    if stmts.as_ref().is_some_and(Vec::is_empty) {
+        return Err(
+            CliError::Usage(format!("migration {filename} contains no SQL statements")).into(),
+        );
+    }
+
+    if can_snapshot && !dry_run {
+        db.checkpoint()?;
+        snapshot::take_snapshot(version, db_path, snapshots_dir)
+            .with_context(|| format!("failed to snapshot before {version}"))?;
+    }
+
+    let is_non_tx = has_non_transactional_directive(&content);
+
+    if dry_run {
+        if can_snapshot {
+            println!("would apply  {filename}  (snapshot: pre-{version}.db)");
+        } else {
+            println!("would apply  {filename}");
+        }
+        return Ok(false);
+    }
+
+    let checksum = sha256_hex(content.as_bytes());
+
+    if is_non_tx {
+        let sql = strip_directive(&content);
+        let has_tx = stmts.as_ref().map_or_else(
+            || has_explicit_transaction(&sql),
+            |s| has_explicit_transaction_stmts(s),
+        );
+        if has_tx {
+            warn!(
+                migration = %filename,
+                "non-transactional migration contains explicit BEGIN/COMMIT statements"
+            );
+        }
+        execute_non_transactional(
+            db,
+            &filename,
+            version,
+            &sql,
+            db_path,
+            snapshots_dir,
+            can_snapshot,
+        )?;
+    } else {
+        execute_transactional(db, &filename, version, &content)?;
+    }
+
+    record_migration(db, version, &checksum, &filename)?;
+
+    if can_snapshot {
+        println!("apply  {filename}  (snapshot: pre-{version}.db)");
+    } else {
+        println!("apply  {filename}");
+    }
+
+    Ok(true)
+}
+
 /// Apply all pending migrations from `plan` against `db`.
 ///
 /// For each pending migration:
@@ -209,100 +345,8 @@ pub fn apply_pending(db: &Db, plan: &Plan, config: &Config, dry_run: bool) -> Re
     let mut n_applied = 0u32;
 
     for entry in plan.pending() {
-        let version = &entry.version;
-        let file = entry.file.as_ref().context("pending entry has no file")?;
-
-        let filename = file
-            .path
-            .file_name()
-            .map(|s| s.to_string_lossy().to_string())
-            .unwrap_or_else(|| version.clone());
-
-        let content = std::fs::read_to_string(&file.path)
-            .with_context(|| format!("failed to read {}", file.path.display()))?;
-
-        let stmts = parse_sql_statements(&content);
-        if stmts.as_ref().is_some_and(Vec::is_empty) {
-            return Err(CliError::Usage(format!(
-                "migration {filename} contains no SQL statements"
-            ))
-            .into());
-        }
-
-        if can_snapshot && !dry_run {
-            db.checkpoint()?;
-            snapshot::take_snapshot(version, &db_path, &snapshots_dir)
-                .with_context(|| format!("failed to snapshot before {version}"))?;
-        }
-
-        let is_non_tx = has_non_transactional_directive(&content);
-
-        if dry_run {
-            if can_snapshot {
-                println!("would apply  {filename}  (snapshot: pre-{version}.db)");
-            } else {
-                println!("would apply  {filename}");
-            }
-            continue;
-        }
-
-        let checksum = sha256_hex(content.as_bytes());
-
-        if is_non_tx {
-            let sql = strip_directive(&content);
-            let has_tx = stmts.as_ref().map_or_else(
-                || has_explicit_transaction(&sql),
-                |s| has_explicit_transaction_stmts(s),
-            );
-            if has_tx {
-                warn!(
-                    migration = %filename,
-                    "non-transactional migration contains explicit BEGIN/COMMIT statements"
-                );
-            }
-            let exec_result = db
-                .connection()
-                .execute_batch(&sql)
-                .with_context(|| format!("failed to execute {filename} ({version})"));
-
-            if let Err(e) = exec_result {
-                if can_snapshot && snapshot::snapshot_exists(version, &snapshots_dir) {
-                    if let Err(restore_err) =
-                        snapshot::restore_snapshot(version, &db_path, &snapshots_dir)
-                    {
-                        return Err(anyhow::anyhow!(
-                            "migration {filename} ({version}) failed; \
-                             attempted to restore pre-migration snapshot but also failed: {restore_err}"
-                        ));
-                    }
-                    return Err(anyhow::anyhow!(
-                        "migration {filename} ({version}) failed; database restored to pre-migration state"
-                    ));
-                }
-                return Err(e);
-            }
-        } else {
-            let sql = format!("BEGIN TRANSACTION;\n{content}\nCOMMIT;");
-            db.connection()
-                .execute_batch(&sql)
-                .with_context(|| format!("failed to execute {filename} ({version})"))?;
-        }
-
-        db.connection()
-            .execute(
-                "INSERT INTO schema_migrations (version, checksum) VALUES (?1, ?2)",
-                params![version, checksum],
-            )
-            .with_context(|| {
-                format!("failed to record {filename} ({version}) in schema_migrations")
-            })?;
-
-        n_applied += 1;
-
-        if can_snapshot {
-            println!("apply  {filename}  (snapshot: pre-{version}.db)");
-        } else {
-            println!("apply  {filename}");
+        if apply_single_migration(db, entry, &db_path, &snapshots_dir, can_snapshot, dry_run)? {
+            n_applied += 1;
         }
     }
 
