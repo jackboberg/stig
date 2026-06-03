@@ -734,3 +734,169 @@ fn migrate_large_set_with_pruning() {
     // Only 3 snapshots should remain.
     assert_eq!(count_snapshot_files(&dir), 3);
 }
+
+// Non-transactional migration that fails mid-way rolls back via snapshot
+#[test]
+fn migrate_non_tx_rollback_on_failure() {
+    let dir = TempDir::new().unwrap();
+    stig_cmd(&dir).arg("init").assert().success();
+
+    // First migration: create a table and insert a row (applies successfully)
+    write_migration(
+        &dir,
+        "20240101000000",
+        "setup",
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);\nINSERT INTO users (name) VALUES ('alice');\n",
+    );
+    stig_cmd(&dir).arg("migrate").assert().success();
+    assert_eq!(count_schema_migrations(&dir), 1);
+
+    // Verify initial state
+    let values = query_column_values(&dir, "users", "name");
+    assert_eq!(values, vec!["alice"]);
+
+    // Second migration: non-transactional, first statement succeeds, second fails
+    write_migration(
+        &dir,
+        "20240102000000",
+        "partial_fail",
+        "stig: non-transactional\nINSERT INTO users (name) VALUES ('bob');\nTHIS IS INVALID SQL;\n",
+    );
+
+    stig_cmd(&dir)
+        .arg("migrate")
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("failed"))
+        .stderr(predicate::str::contains("restored to pre-migration state"));
+
+    // Migration should NOT be recorded
+    assert_eq!(count_schema_migrations(&dir), 1);
+
+    // Database should be rolled back to pre-migration state — only alice, no bob
+    let values = query_column_values(&dir, "users", "name");
+    assert_eq!(
+        values,
+        vec!["alice"],
+        "database should be rolled back, bob should not exist"
+    );
+}
+
+// Non-transactional migration failure without snapshots — no rollback
+#[test]
+fn migrate_non_tx_no_rollback_when_snapshots_disabled() {
+    let dir = TempDir::new().unwrap();
+    stig_cmd(&dir).arg("init").assert().success();
+
+    // First migration: create a table
+    write_migration(
+        &dir,
+        "20240101000000",
+        "setup",
+        "CREATE TABLE items (id INTEGER PRIMARY KEY, value TEXT);\n",
+    );
+    stig_cmd(&dir).arg("migrate").assert().success();
+
+    // Second migration: non-transactional with partial failure, snapshots disabled
+    write_migration(
+        &dir,
+        "20240102000000",
+        "partial_fail",
+        "stig: non-transactional\nINSERT INTO items (value) VALUES ('committed');\nINVALID SQL HERE;\n",
+    );
+
+    stig_cmd(&dir)
+        .env("STIG_NO_SNAPSHOT", "1")
+        .arg("migrate")
+        .assert()
+        .failure()
+        .code(1)
+        .stderr(predicate::str::contains("failed"));
+
+    // Migration should NOT be recorded
+    assert_eq!(count_schema_migrations(&dir), 1);
+
+    // Partial side effect persists (no rollback possible without snapshot)
+    let values = query_column_values(&dir, "items", "value");
+    assert_eq!(
+        values,
+        vec!["committed"],
+        "partial side effect persists when snapshots disabled"
+    );
+}
+
+// Non-transactional migration that succeeds should not trigger rollback
+#[test]
+fn migrate_non_tx_success_no_rollback() {
+    let dir = TempDir::new().unwrap();
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_table",
+        "stig: non-transactional\nCREATE TABLE data (id INTEGER PRIMARY KEY);\nINSERT INTO data VALUES (1);\n",
+    );
+
+    stig_cmd(&dir)
+        .arg("migrate")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "apply  20240101000000_create_table.sql",
+        ));
+
+    assert_eq!(count_schema_migrations(&dir), 1);
+
+    let conn = Connection::open(dir.path().join("app.db")).unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM data", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+}
+
+// Non-transactional migration failure: subsequent migrate retries successfully
+#[test]
+fn migrate_non_tx_retry_after_fix() {
+    let dir = TempDir::new().unwrap();
+    stig_cmd(&dir).arg("init").assert().success();
+
+    // Setup
+    write_migration(
+        &dir,
+        "20240101000000",
+        "setup",
+        "CREATE TABLE things (id INTEGER PRIMARY KEY, label TEXT);\n",
+    );
+    stig_cmd(&dir).arg("migrate").assert().success();
+
+    // Failing migration
+    let migration_path = dir.path().join("db/migrations/20240102000000_partial.sql");
+    std::fs::write(
+        &migration_path,
+        "stig: non-transactional\nINSERT INTO things (label) VALUES ('test');\nBAD SQL;\n",
+    )
+    .unwrap();
+    stig_cmd(&dir).arg("migrate").assert().failure().code(1);
+
+    // Fix the migration by overwriting the same file
+    std::fs::write(
+        &migration_path,
+        "stig: non-transactional\nINSERT INTO things (label) VALUES ('test');\n",
+    )
+    .unwrap();
+
+    // Should apply successfully on retry
+    stig_cmd(&dir)
+        .arg("migrate")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "apply  20240102000000_partial.sql",
+        ));
+
+    assert_eq!(count_schema_migrations(&dir), 2);
+    let values = query_column_values(&dir, "things", "label");
+    assert_eq!(values, vec!["test"]);
+}
