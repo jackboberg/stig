@@ -594,16 +594,83 @@ fn migrate_prunes_snapshots_across_keep() {
     assert!(snapshot_exists(&dir, "20240104000000_migration_4"));
 }
 
-// Empty migration (comments only) succeeds
+// Empty migration (comments only) fails with exit code 2
 #[test]
-fn migrate_empty_migration_succeeds() {
+fn migrate_empty_migration_fails() {
     let dir = TempDir::new().unwrap();
     stig_cmd(&dir).arg("init").assert().success();
 
     write_migration(&dir, "20240101000000", "empty", "-- just a comment\n\n");
 
-    stig_cmd(&dir).arg("migrate").assert().success();
-    assert_eq!(count_schema_migrations(&dir), 1);
+    stig_cmd(&dir)
+        .arg("migrate")
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("contains no SQL statements"));
+
+    assert_eq!(count_schema_migrations(&dir), 0);
+}
+
+// Comments-only migration fails
+#[test]
+fn migrate_comments_only_migration_fails() {
+    let dir = TempDir::new().unwrap();
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "comments",
+        "-- header\n-- body\n/* block */\n",
+    );
+
+    stig_cmd(&dir)
+        .arg("migrate")
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("contains no SQL statements"));
+}
+
+// Directive-only migration fails
+#[test]
+fn migrate_directive_only_migration_fails() {
+    let dir = TempDir::new().unwrap();
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "directive_only",
+        "stig: non-transactional\n",
+    );
+
+    stig_cmd(&dir)
+        .arg("migrate")
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("contains no SQL statements"));
+}
+
+// Dry-run also rejects empty migrations
+#[test]
+fn migrate_dry_run_empty_migration_fails() {
+    let dir = TempDir::new().unwrap();
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(&dir, "20240101000000", "empty", "-- just a comment\n\n");
+
+    stig_cmd(&dir)
+        .arg("migrate")
+        .arg("--dry-run")
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("contains no SQL statements"));
+
+    assert_eq!(count_schema_migrations(&dir), 0);
 }
 
 // Non-transactional migration with PRAGMA
