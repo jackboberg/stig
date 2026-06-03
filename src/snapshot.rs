@@ -25,7 +25,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 
 // ---------------------------------------------------------------------------
 // Public API
@@ -205,7 +205,15 @@ pub fn prune_snapshots(snapshots_dir: &Path, keep: u32) -> Result<()> {
 /// On partial failure all destination files are removed and the source files
 /// are restored before the error is returned.
 pub fn take_reset_backup(db_path: &Path, resets_dir: &Path) -> Result<PathBuf> {
-    let ts = Utc::now().format("%Y%m%dT%H%M%SZ");
+    take_reset_backup_with_clock(db_path, resets_dir, Utc::now)
+}
+
+pub fn take_reset_backup_with_clock(
+    db_path: &Path,
+    resets_dir: &Path,
+    now: impl Fn() -> DateTime<Utc>,
+) -> Result<PathBuf> {
+    let ts = now().format("%Y%m%dT%H%M%SZ");
     let dest_base = resets_dir.join(format!("reset-{ts}.db"));
 
     if dest_base.exists() {
@@ -383,6 +391,22 @@ mod tests {
         assert!(path.exists(), "expected file to exist: {}", path.display());
         let actual = std::fs::read(path).unwrap();
         assert_eq!(actual, content, "content mismatch at {}", path.display());
+    }
+
+    /// A fake clock that returns an incrementing timestamp each time.
+    /// Each call advances the clock by 1 second.
+    fn fake_clock(start_epoch: i64) -> impl Fn() -> DateTime<Utc> {
+        let counter = std::cell::Cell::new(start_epoch);
+        move || {
+            let ts = counter.get();
+            counter.set(ts + 1);
+            DateTime::<Utc>::from_timestamp(ts, 0).unwrap()
+        }
+    }
+
+    /// A fake clock that always returns the same timestamp.
+    fn frozen_clock(epoch: i64) -> impl Fn() -> DateTime<Utc> {
+        move || DateTime::<Utc>::from_timestamp(epoch, 0).unwrap()
     }
 
     // -----------------------------------------------------------------------
@@ -629,7 +653,7 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // take_reset_backup
+    // take_reset_backup (with injectable clock)
     // -----------------------------------------------------------------------
 
     #[test]
@@ -639,7 +663,8 @@ mod tests {
         let resets = dir.path().join("resets");
         std::fs::create_dir(&resets).unwrap();
 
-        take_reset_backup(&db, &resets).unwrap();
+        let clock = fake_clock(1_700_000_000);
+        take_reset_backup_with_clock(&db, &resets, &clock).unwrap();
 
         // Source is gone.
         assert!(!db.exists());
@@ -662,7 +687,8 @@ mod tests {
         let resets = dir.path().join("resets");
         std::fs::create_dir(&resets).unwrap();
 
-        take_reset_backup(&db, &resets).unwrap();
+        let clock = fake_clock(1_700_000_000);
+        take_reset_backup_with_clock(&db, &resets, &clock).unwrap();
 
         assert!(!db.exists());
         assert!(!dir.path().join("app.db-wal").exists());
@@ -684,7 +710,8 @@ mod tests {
         let resets = dir.path().join("resets");
         std::fs::create_dir(&resets).unwrap();
 
-        let result = take_reset_backup(&db, &resets).unwrap();
+        let clock = fake_clock(1_700_000_000);
+        let result = take_reset_backup_with_clock(&db, &resets, &clock).unwrap();
 
         assert!(result.exists());
         let name = result.file_name().unwrap().to_string_lossy();
@@ -702,12 +729,19 @@ mod tests {
         let resets = dir.path().join("resets");
         std::fs::create_dir(&resets).unwrap();
 
-        let result = take_reset_backup(&db, &resets).unwrap();
+        let clock = frozen_clock(1_700_000_000);
+        let result = take_reset_backup_with_clock(&db, &resets, &clock).unwrap();
         let name = result.file_name().unwrap().to_string_lossy().to_string();
 
-        // Name should be reset-<14+ char timestamp>Z.db
-        assert!(name.starts_with("reset-"));
-        assert!(name.ends_with("Z.db"));
+        // The frozen clock returns a known timestamp; verify it appears in the name.
+        let expected_ts = DateTime::<Utc>::from_timestamp(1_700_000_000, 0)
+            .unwrap()
+            .format("%Y%m%dT%H%M%SZ")
+            .to_string();
+        assert!(
+            name.contains(&expected_ts),
+            "expected timestamp {expected_ts} in name {name}"
+        );
     }
 
     #[test]
@@ -716,36 +750,14 @@ mod tests {
         let resets = dir.path().join("resets");
         std::fs::create_dir(&resets).unwrap();
 
-        // Pre-create a file that matches the current-second timestamp pattern
-        // by calling take_reset_backup once, then immediately calling it again
-        // with a fresh source file.  Because the second call happens within the
-        // same second, the destination already exists and must be rejected.
+        // Use a frozen clock so both calls produce the same destination path.
+        let clock = frozen_clock(1_700_000_000);
+
         let db1 = write_file(dir.path(), "app1.db", b"first");
-        let first_result = take_reset_backup(&db1, &resets).unwrap();
+        take_reset_backup_with_clock(&db1, &resets, &clock).unwrap();
 
-        // Synthesise a collision: write a fresh source and pre-create the
-        // *exact same destination name* that the next call would produce.
         let db2 = write_file(dir.path(), "app2.db", b"second");
-        // Copy the first result file to a temp location, then rename it back
-        // to simulate a same-second collision without actually needing to be
-        // that fast.
-        std::fs::copy(
-            &first_result,
-            resets.join(first_result.file_name().unwrap()),
-        )
-        .ok();
-
-        // Directly pre-create the destination that take_reset_backup would
-        // choose by writing a zero-byte sentinel at that path.
-        let ts = chrono::Utc::now().format("%Y%m%dT%H%M%SZ");
-        let collision_path = resets.join(format!("reset-{ts}.db"));
-        write_file(
-            &resets,
-            collision_path.file_name().unwrap().to_str().unwrap(),
-            b"",
-        );
-
-        let result = take_reset_backup(&db2, &resets);
+        let result = take_reset_backup_with_clock(&db2, &resets, &clock);
         assert!(result.is_err(), "expected error on timestamp collision");
         let msg = format!("{:?}", result.unwrap_err());
         assert!(
@@ -754,6 +766,27 @@ mod tests {
         );
         // Source DB must be untouched.
         assert_file_content(&db2, b"second");
+    }
+
+    #[test]
+    fn take_reset_backup_uses_clock_for_timestamp() {
+        let dir = TempDir::new().unwrap();
+        let db = write_file(dir.path(), "app.db", b"db");
+        let resets = dir.path().join("resets");
+        std::fs::create_dir(&resets).unwrap();
+
+        let clock = fake_clock(1_700_000_000);
+        let result = take_reset_backup_with_clock(&db, &resets, &clock).unwrap();
+
+        let name = result.file_name().unwrap().to_string_lossy().to_string();
+        let expected_ts = DateTime::<Utc>::from_timestamp(1_700_000_000, 0)
+            .unwrap()
+            .format("%Y%m%dT%H%M%SZ")
+            .to_string();
+        assert!(
+            name == format!("reset-{expected_ts}.db"),
+            "expected name reset-{expected_ts}.db, got {name}"
+        );
     }
 
     // -----------------------------------------------------------------------
