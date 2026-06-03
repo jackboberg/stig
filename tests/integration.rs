@@ -9,9 +9,7 @@ use tempfile::TempDir;
 
 use common::{stig_cmd, write_migration};
 
-// ---------------------------------------------------------------------------
 // Helpers
-// ---------------------------------------------------------------------------
 
 fn count_schema_migrations(dir: &TempDir) -> i64 {
     let conn = Connection::open(dir.path().join("app.db")).unwrap();
@@ -43,10 +41,7 @@ fn count_reset_files(dir: &TempDir) -> usize {
         .count()
 }
 
-// ---------------------------------------------------------------------------
 // DATABASE_PATH fallback env var
-// ---------------------------------------------------------------------------
-
 #[test]
 fn env_database_path_fallback() {
     let dir = TempDir::new().unwrap();
@@ -67,10 +62,7 @@ fn env_database_path_fallback() {
     assert_eq!(count, 0, "fresh DB should have no migrations");
 }
 
-// ---------------------------------------------------------------------------
 // Config upward search from subdirectory
-// ---------------------------------------------------------------------------
-
 #[test]
 fn config_upward_search_from_subdir() {
     let dir = TempDir::new().unwrap();
@@ -96,10 +88,7 @@ fn config_upward_search_from_subdir() {
         .stdout(predicate::str::contains("1 applied, 0 pending, 0 drifted"));
 }
 
-// ---------------------------------------------------------------------------
 // Full dev-iteration cycle: init → migrate → drift → redo → generate
-// ---------------------------------------------------------------------------
-
 #[test]
 fn full_dev_iteration_cycle() {
     let dir = TempDir::new().unwrap();
@@ -175,10 +164,7 @@ fn full_dev_iteration_cycle() {
     assert!(ts.contains("\"price\": number"));
 }
 
-// ---------------------------------------------------------------------------
 // Reset and re-migrate cycle: migrate → insert data → reset → verify
-// ---------------------------------------------------------------------------
-
 #[test]
 fn reset_and_re_migrate_cycle() {
     let dir = TempDir::new().unwrap();
@@ -232,10 +218,7 @@ fn reset_and_re_migrate_cycle() {
     assert_eq!(count_reset_files(&dir), 1);
 }
 
-// ---------------------------------------------------------------------------
 // Status accuracy across multiple states
-// ---------------------------------------------------------------------------
-
 #[test]
 fn status_reports_correctly_after_each_state() {
     let dir = TempDir::new().unwrap();
@@ -288,10 +271,7 @@ fn status_reports_correctly_after_each_state() {
     assert!(stdout.contains("2 applied"));
 }
 
-// ---------------------------------------------------------------------------
 // Generate reflects schema changes across migrations
-// ---------------------------------------------------------------------------
-
 #[test]
 fn generate_reflects_schema_changes() {
     let dir = TempDir::new().unwrap();
@@ -336,10 +316,7 @@ fn generate_reflects_schema_changes() {
     assert!(ts2.contains("\"posts\""));
 }
 
-// ---------------------------------------------------------------------------
 // Redo re-applies from middle of chain
-// ---------------------------------------------------------------------------
-
 #[test]
 fn redo_reapplies_from_middle_of_chain() {
     let dir = TempDir::new().unwrap();
@@ -394,10 +371,7 @@ fn redo_reapplies_from_middle_of_chain() {
     assert_eq!(count_schema_migrations(&dir), 3);
 }
 
-// ---------------------------------------------------------------------------
 // Locked DB fails gracefully
-// ---------------------------------------------------------------------------
-
 #[test]
 fn locked_db_exits_5() {
     let dir = TempDir::new().unwrap();
@@ -431,10 +405,7 @@ fn locked_db_exits_5() {
     _lock.execute_batch("ROLLBACK;").ok();
 }
 
-// ---------------------------------------------------------------------------
 // Custom paths via config
-// ---------------------------------------------------------------------------
-
 #[test]
 fn custom_paths_via_config() {
     let dir = TempDir::new().unwrap();
@@ -487,10 +458,7 @@ fn custom_paths_via_config() {
         .stdout(predicate::str::contains("1 applied, 0 pending"));
 }
 
-// ---------------------------------------------------------------------------
 // Redo after pruned snapshot lists eligible versions
-// ---------------------------------------------------------------------------
-
 #[test]
 fn redo_after_pruned_snapshot_lists_eligible() {
     let dir = TempDir::new().unwrap();
@@ -529,10 +497,7 @@ fn redo_after_pruned_snapshot_lists_eligible() {
         .stderr(predicate::str::contains("20240102000000_second"));
 }
 
-// ---------------------------------------------------------------------------
 // Migrate → reset → redo compose
-// ---------------------------------------------------------------------------
-
 #[test]
 fn migrate_reset_redo_compose() {
     let dir = TempDir::new().unwrap();

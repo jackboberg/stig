@@ -43,10 +43,7 @@ fn query_column_values(dir: &TempDir, table: &str, column: &str) -> Vec<String> 
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// 1. Core acceptance: apply two, edit second, redo (no args)
-// ---------------------------------------------------------------------------
-
+// Core acceptance: apply two, edit second, redo (no args)
 #[test]
 fn redo_reapplies_edited_migration() {
     let dir = TempDir::new().unwrap();
@@ -97,10 +94,7 @@ fn redo_reapplies_edited_migration() {
     assert_eq!(count_schema_migrations(&dir), 2);
 }
 
-// ---------------------------------------------------------------------------
-// 2. redo <version> re-applies from that version forward
-// ---------------------------------------------------------------------------
-
+// redo <version> re-applies from that version forward
 #[test]
 fn redo_from_specific_version() {
     let dir = TempDir::new().unwrap();
@@ -155,10 +149,7 @@ fn redo_from_specific_version() {
     assert_eq!(count_schema_migrations(&dir), 3);
 }
 
-// ---------------------------------------------------------------------------
-// 3. Missing snapshot exits 4
-// ---------------------------------------------------------------------------
-
+// Missing snapshot exits 4
 #[test]
 fn redo_exits_4_when_snapshot_missing() {
     let dir = TempDir::new().unwrap();
@@ -191,10 +182,7 @@ fn redo_exits_4_when_snapshot_missing() {
         .stderr(predicate::str::contains("no redo-eligible versions"));
 }
 
-// ---------------------------------------------------------------------------
-// 4. Data added after snapshot is discarded
-// ---------------------------------------------------------------------------
-
+// Data added after snapshot is discarded
 #[test]
 fn redo_discards_data_added_after_snapshot() {
     let dir = TempDir::new().unwrap();
@@ -237,10 +225,7 @@ fn redo_discards_data_added_after_snapshot() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// 5. No applied migrations exits 4
-// ---------------------------------------------------------------------------
-
+// No applied migrations exits 4
 #[test]
 fn redo_exits_4_when_no_applied_migrations() {
     let dir = TempDir::new().unwrap();
@@ -264,10 +249,7 @@ fn redo_exits_4_when_no_applied_migrations() {
         .stderr(predicate::str::contains("no applied migrations to redo"));
 }
 
-// ---------------------------------------------------------------------------
-// 6. Explicit --yes skips confirmation prompt
-// ---------------------------------------------------------------------------
-
+// Explicit --yes skips confirmation prompt
 #[test]
 fn redo_with_yes_flag_runs_without_prompt() {
     let dir = TempDir::new().unwrap();
@@ -292,10 +274,7 @@ fn redo_with_yes_flag_runs_without_prompt() {
         .stdout(predicate::str::contains("✓ redo complete"));
 }
 
-// ---------------------------------------------------------------------------
-// 7. Invalid version exits 4 with clear message
-// ---------------------------------------------------------------------------
-
+// Invalid version exits 4 with clear message
 #[test]
 fn redo_exits_4_when_version_not_applied() {
     let dir = TempDir::new().unwrap();

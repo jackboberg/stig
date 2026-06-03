@@ -25,10 +25,7 @@ fn init(dir: &TempDir) {
     stig_cmd(dir).arg("init").assert().success(); // dir is &TempDir here already
 }
 
-// ---------------------------------------------------------------------------
-// 1. Happy path: file created with expected name and template content
-// ---------------------------------------------------------------------------
-
+// Happy path: file created with expected name and template content
 #[test]
 fn new_creates_migration_file_with_correct_name_and_content() {
     let dir = TempDir::new().unwrap();
@@ -75,10 +72,7 @@ fn new_creates_migration_file_with_correct_name_and_content() {
     assert!(content.ends_with("\n\n"));
 }
 
-// ---------------------------------------------------------------------------
-// 2. Empty description exits 2
-// ---------------------------------------------------------------------------
-
+// Empty description exits 2
 #[test]
 fn new_empty_description_exits_2() {
     let dir = TempDir::new().unwrap();
@@ -92,10 +86,7 @@ fn new_empty_description_exits_2() {
         .stderr(predicate::str::contains("empty slug"));
 }
 
-// ---------------------------------------------------------------------------
-// 3. Whitespace-only description exits 2
-// ---------------------------------------------------------------------------
-
+// Whitespace-only description exits 2
 #[test]
 fn new_whitespace_only_description_exits_2() {
     let dir = TempDir::new().unwrap();
@@ -109,12 +100,9 @@ fn new_whitespace_only_description_exits_2() {
         .stderr(predicate::str::contains("empty slug"));
 }
 
-// ---------------------------------------------------------------------------
-// 4. Punctuation-only description (no alphanumeric chars) exits 2
-//    The collision path is exercised by the unit test build_path_errors_on_collision
-//    in src/cli/new.rs; no integration-level collision test is needed.
-// ---------------------------------------------------------------------------
-
+// Punctuation-only description (no alphanumeric chars) exits 2.
+// The collision path is exercised by the unit test build_path_errors_on_collision
+// in src/cli/new.rs; no integration-level collision test is needed.
 #[test]
 fn new_punctuation_only_description_exits_2() {
     let dir = TempDir::new().unwrap();
@@ -128,10 +116,7 @@ fn new_punctuation_only_description_exits_2() {
         .stderr(predicate::str::contains("empty slug"));
 }
 
-// ---------------------------------------------------------------------------
-// 5. --no-edit skips $EDITOR even when EDITOR is set
-// ---------------------------------------------------------------------------
-
+// --no-edit skips $EDITOR even when EDITOR is set
 #[test]
 fn new_no_edit_skips_editor() {
     let dir = TempDir::new().unwrap();
@@ -145,10 +130,7 @@ fn new_no_edit_skips_editor() {
         .success();
 }
 
-// ---------------------------------------------------------------------------
-// 6. Without --no-edit, unset $EDITOR succeeds silently
-// ---------------------------------------------------------------------------
-
+// Without --no-edit, unset $EDITOR succeeds silently
 #[test]
 fn new_no_editor_env_succeeds_silently() {
     let dir = TempDir::new().unwrap();
@@ -161,10 +143,7 @@ fn new_no_editor_env_succeeds_silently() {
         .success();
 }
 
-// ---------------------------------------------------------------------------
-// 7. No migrations dir (no init) exits 2
-// ---------------------------------------------------------------------------
-
+// No migrations dir (no init) exits 2
 #[test]
 fn new_without_init_exits_2() {
     let dir = TempDir::new().unwrap();

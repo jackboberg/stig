@@ -8,10 +8,7 @@ use tempfile::TempDir;
 
 use common::stig_cmd;
 
-// ---------------------------------------------------------------------------
-// 1. Happy path: empty directory produces all expected artifacts
-// ---------------------------------------------------------------------------
-
+// Happy path: empty directory produces all expected artifacts
 #[test]
 fn init_creates_all_expected_artifacts() {
     let dir = TempDir::new().unwrap();
@@ -53,10 +50,7 @@ fn init_creates_all_expected_artifacts() {
     assert_eq!(count, 0);
 }
 
-// ---------------------------------------------------------------------------
-// 2. Re-run without --force exits 2 and leaves files unchanged
-// ---------------------------------------------------------------------------
-
+// Re-run without --force exits 2 and leaves files unchanged
 #[test]
 fn init_exits_2_when_config_exists() {
     let dir = TempDir::new().unwrap();
@@ -79,10 +73,7 @@ fn init_exits_2_when_config_exists() {
     assert_eq!(toml_before, toml_after);
 }
 
-// ---------------------------------------------------------------------------
-// 3. schema_migrations checksum column has no DEFAULT (SPEC §5)
-// ---------------------------------------------------------------------------
-
+// schema_migrations checksum column has no DEFAULT (SPEC §5)
 #[test]
 fn schema_migrations_checksum_has_no_default() {
     let dir = TempDir::new().unwrap();

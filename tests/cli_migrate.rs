@@ -55,10 +55,7 @@ fn query_column_values(dir: &TempDir, table: &str, column: &str) -> Vec<String> 
         .collect()
 }
 
-// ---------------------------------------------------------------------------
-// 1. Happy path: fresh DB applies all pending migrations
-// ---------------------------------------------------------------------------
-
+// Happy path: fresh DB applies all pending migrations
 #[test]
 fn migrate_applies_pending() {
     let dir = TempDir::new().unwrap();
@@ -109,10 +106,7 @@ fn migrate_applies_pending() {
     assert_eq!(table_count, 2);
 }
 
-// ---------------------------------------------------------------------------
-// 2. No-op when already up to date
-// ---------------------------------------------------------------------------
-
+// No-op when already up to date
 #[test]
 fn migrate_noop_when_up_to_date() {
     let dir = TempDir::new().unwrap();
@@ -139,10 +133,7 @@ fn migrate_noop_when_up_to_date() {
     assert_eq!(count_schema_migrations(&dir), 1);
 }
 
-// ---------------------------------------------------------------------------
-// 3. Drift detection exits 3
-// ---------------------------------------------------------------------------
-
+// Drift detection exits 3
 #[test]
 fn migrate_exits_3_on_drift() {
     let dir = TempDir::new().unwrap();
@@ -173,10 +164,7 @@ fn migrate_exits_3_on_drift() {
         .stderr(predicate::str::contains("run: stig redo 20240101000000"));
 }
 
-// ---------------------------------------------------------------------------
-// 4. --dry-run does not mutate state
-// ---------------------------------------------------------------------------
-
+// --dry-run does not mutate state
 #[test]
 fn migrate_dry_run_does_not_mutate() {
     let dir = TempDir::new().unwrap();
@@ -218,10 +206,7 @@ fn migrate_dry_run_does_not_mutate() {
     assert_eq!(table_count, 0);
 }
 
-// ---------------------------------------------------------------------------
-// 5. Non-transactional directive is honored
-// ---------------------------------------------------------------------------
-
+// Non-transactional directive is honored
 #[test]
 fn migrate_honors_non_transactional_directive() {
     let dir = TempDir::new().unwrap();
@@ -248,10 +233,7 @@ fn migrate_honors_non_transactional_directive() {
     assert_eq!(count_schema_migrations(&dir), 1);
 }
 
-// ---------------------------------------------------------------------------
-// 6. Missing migrations directory exits 4
-// ---------------------------------------------------------------------------
-
+// Missing migrations directory exits 4
 #[test]
 fn migrate_exits_4_when_migrations_dir_missing() {
     let dir = TempDir::new().unwrap();
@@ -268,10 +250,7 @@ fn migrate_exits_4_when_migrations_dir_missing() {
         .stderr(predicate::str::contains("migrations directory not found"));
 }
 
-// ---------------------------------------------------------------------------
-// 7. Dry-run with no pending migrations is a no-op
-// ---------------------------------------------------------------------------
-
+// Dry-run with no pending migrations is a no-op
 #[test]
 fn migrate_dry_run_noop_when_up_to_date() {
     let dir = TempDir::new().unwrap();
@@ -296,10 +275,7 @@ fn migrate_dry_run_noop_when_up_to_date() {
         ));
 }
 
-// ---------------------------------------------------------------------------
-// 8. auto_snapshot=false — no snapshots taken
-// ---------------------------------------------------------------------------
-
+// auto_snapshot=false — no snapshots taken
 #[test]
 fn migrate_no_snapshot_when_disabled() {
     let dir = TempDir::new().unwrap();
@@ -330,10 +306,7 @@ fn migrate_no_snapshot_when_disabled() {
     assert!(!snapshot_exists(&dir, "20240101000000_create_users"));
 }
 
-// ---------------------------------------------------------------------------
-// 9. checksum_check=false — drift is silently ignored
-// ---------------------------------------------------------------------------
-
+// checksum_check=false — drift is silently ignored
 #[test]
 fn migrate_ignores_drift_when_checksum_check_disabled() {
     let dir = TempDir::new().unwrap();
@@ -378,10 +351,7 @@ fn migrate_ignores_drift_when_checksum_check_disabled() {
     assert_eq!(count_schema_migrations(&dir), 2);
 }
 
-// ---------------------------------------------------------------------------
-// 10. Drift exits 3 even when pending migrations exist
-// ---------------------------------------------------------------------------
-
+// Drift exits 3 even when pending migrations exist
 #[test]
 fn migrate_drift_with_pending_fails_before_apply() {
     let dir = TempDir::new().unwrap();
@@ -438,10 +408,7 @@ fn migrate_drift_with_pending_fails_before_apply() {
     assert_eq!(post_count, 0);
 }
 
-// ---------------------------------------------------------------------------
-// 11. Snapshots are pruned after migration, keeping only snapshot_keep
-// ---------------------------------------------------------------------------
-
+// Snapshots are pruned after migration, keeping only snapshot_keep
 #[test]
 fn migrate_prunes_snapshots() {
     let dir = TempDir::new().unwrap();
@@ -495,10 +462,7 @@ fn migrate_prunes_snapshots() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// 12. Drift with pruned snapshot — hard fail suggesting reset
-// ---------------------------------------------------------------------------
-
+// Drift with pruned snapshot — hard fail suggesting reset
 #[test]
 fn migrate_drift_with_pruned_snapshot_hard_fail() {
     let dir = TempDir::new().unwrap();
@@ -543,10 +507,7 @@ fn migrate_drift_with_pruned_snapshot_hard_fail() {
         ));
 }
 
-// ---------------------------------------------------------------------------
-// 13. Migrations apply in lexicographic order
-// ---------------------------------------------------------------------------
-
+// Migrations apply in lexicographic order
 #[test]
 fn migrate_applies_in_lexicographic_order() {
     let dir = TempDir::new().unwrap();
@@ -592,10 +553,7 @@ fn migrate_applies_in_lexicographic_order() {
     assert_eq!(values, vec!["fifth", "fourth", "second", "third"]);
 }
 
-// ---------------------------------------------------------------------------
-// 14. Snapshot pruning across multiple keep cycles
-// ---------------------------------------------------------------------------
-
+// Snapshot pruning across multiple keep cycles
 #[test]
 fn migrate_prunes_snapshots_across_keep() {
     let dir = TempDir::new().unwrap();
@@ -636,10 +594,7 @@ fn migrate_prunes_snapshots_across_keep() {
     assert!(snapshot_exists(&dir, "20240104000000_migration_4"));
 }
 
-// ---------------------------------------------------------------------------
-// 15. Empty migration (comments only) succeeds
-// ---------------------------------------------------------------------------
-
+// Empty migration (comments only) succeeds
 #[test]
 fn migrate_empty_migration_succeeds() {
     let dir = TempDir::new().unwrap();
@@ -651,10 +606,7 @@ fn migrate_empty_migration_succeeds() {
     assert_eq!(count_schema_migrations(&dir), 1);
 }
 
-// ---------------------------------------------------------------------------
-// 16. Non-transactional migration with PRAGMA
-// ---------------------------------------------------------------------------
-
+// Non-transactional migration with PRAGMA
 #[test]
 fn migrate_non_transactional_with_pragma() {
     let dir = TempDir::new().unwrap();
@@ -672,10 +624,7 @@ fn migrate_non_transactional_with_pragma() {
     assert!(query_column_values(&dir, "sqlite_master", "name").contains(&"x".to_string()));
 }
 
-// ---------------------------------------------------------------------------
-// 17. Large migration set with pruning at scale
-// ---------------------------------------------------------------------------
-
+// Large migration set with pruning at scale
 #[test]
 fn migrate_large_set_with_pruning() {
     let dir = TempDir::new().unwrap();

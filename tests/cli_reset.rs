@@ -40,10 +40,7 @@ fn count_reset_files(dir: &TempDir) -> usize {
         .count()
 }
 
-// ---------------------------------------------------------------------------
-// 1. Core acceptance: populated DB, reset --yes, fresh migrations applied
-// ---------------------------------------------------------------------------
-
+// Core acceptance: populated DB, reset --yes, fresh migrations applied
 #[test]
 fn reset_reapplies_all_migrations() {
     let dir = TempDir::new().unwrap();
@@ -100,10 +97,7 @@ fn reset_reapplies_all_migrations() {
     assert_eq!(count_reset_files(&dir), 1);
 }
 
-// ---------------------------------------------------------------------------
-// 2. Reset backup artifact is created in resets/
-// ---------------------------------------------------------------------------
-
+// Reset backup artifact is created in resets/
 #[test]
 fn reset_creates_backup_artifact() {
     let dir = TempDir::new().unwrap();
@@ -143,10 +137,7 @@ fn reset_creates_backup_artifact() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// 3. Prune respects reset_keep
-// ---------------------------------------------------------------------------
-
+// Prune respects reset_keep
 #[test]
 fn reset_prunes_resets_beyond_keep() {
     let dir = TempDir::new().unwrap();
@@ -183,10 +174,7 @@ fn reset_prunes_resets_beyond_keep() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// 4. --yes flag runs without prompt
-// ---------------------------------------------------------------------------
-
+// --yes flag runs without prompt
 #[test]
 fn reset_with_yes_flag_runs_without_prompt() {
     let dir = TempDir::new().unwrap();
@@ -211,10 +199,7 @@ fn reset_with_yes_flag_runs_without_prompt() {
         .stdout(predicate::str::contains("✓ reset complete"));
 }
 
-// ---------------------------------------------------------------------------
-// 5. Declining the prompt exits 2 without changes
-// ---------------------------------------------------------------------------
-
+// Declining the prompt exits 2 without changes
 #[test]
 fn reset_declined_exits_2() {
     let dir = TempDir::new().unwrap();
@@ -244,10 +229,7 @@ fn reset_declined_exits_2() {
     assert!(table_exists(&dir, "foo"));
 }
 
-// ---------------------------------------------------------------------------
-// 6. Creates resets dir if missing
-// ---------------------------------------------------------------------------
-
+// Creates resets dir if missing
 #[test]
 fn reset_creates_resets_dir_if_missing() {
     let dir = TempDir::new().unwrap();
@@ -274,10 +256,7 @@ fn reset_creates_resets_dir_if_missing() {
     assert_eq!(count_reset_files(&dir), 1);
 }
 
-// ---------------------------------------------------------------------------
-// 7. Decline then accept — full round-trip
-// ---------------------------------------------------------------------------
-
+// Decline then accept — full round-trip
 #[test]
 fn reset_declined_then_accepted() {
     let dir = TempDir::new().unwrap();

@@ -33,10 +33,7 @@ fn generate_ts(conn: &Connection, out_path: &str) -> String {
     std::fs::read_to_string(&outputs[0].path).unwrap()
 }
 
-// ---------------------------------------------------------------------------
-// 1. Simple table with all affinities
-// ---------------------------------------------------------------------------
-
+// Simple table with all affinities
 #[test]
 fn simple_table_all_affinities() {
     let conn = Connection::open_in_memory().unwrap();
@@ -69,10 +66,7 @@ fn simple_table_all_affinities() {
     insta::assert_snapshot!("all_affinities", output);
 }
 
-// ---------------------------------------------------------------------------
-// 2. Nullable columns and columns with defaults
-// ---------------------------------------------------------------------------
-
+// Nullable columns and columns with defaults
 #[test]
 fn nullable_and_default_columns() {
     let conn = Connection::open_in_memory().unwrap();
@@ -91,10 +85,7 @@ fn nullable_and_default_columns() {
     insta::assert_snapshot!("nullable_and_defaults", output);
 }
 
-// ---------------------------------------------------------------------------
-// 3. INTEGER PRIMARY KEY rowid alias
-// ---------------------------------------------------------------------------
-
+// INTEGER PRIMARY KEY rowid alias
 #[test]
 fn integer_primary_key_rowid_alias() {
     let conn = Connection::open_in_memory().unwrap();
@@ -111,10 +102,7 @@ fn integer_primary_key_rowid_alias() {
     insta::assert_snapshot!("rowid_alias", output);
 }
 
-// ---------------------------------------------------------------------------
-// 4. WITHOUT ROWID — should NOT be treated as rowid alias
-// ---------------------------------------------------------------------------
-
+// WITHOUT ROWID — should NOT be treated as rowid alias
 #[test]
 fn without_rowid_not_alias() {
     let conn = Connection::open_in_memory().unwrap();
@@ -130,10 +118,7 @@ fn without_rowid_not_alias() {
     insta::assert_snapshot!("without_rowid", output);
 }
 
-// ---------------------------------------------------------------------------
-// 5. CHECK-IN enum extraction
-// ---------------------------------------------------------------------------
-
+// CHECK-IN enum extraction
 #[test]
 fn check_in_enum() {
     let conn = Connection::open_in_memory().unwrap();
@@ -151,10 +136,7 @@ fn check_in_enum() {
     insta::assert_snapshot!("check_in_enum", output);
 }
 
-// ---------------------------------------------------------------------------
-// 6. Reserved-word table name
-// ---------------------------------------------------------------------------
-
+// Reserved-word table name
 #[test]
 fn reserved_word_table_name() {
     let conn = Connection::open_in_memory().unwrap();
@@ -170,10 +152,7 @@ fn reserved_word_table_name() {
     insta::assert_snapshot!("reserved_word_table_name", output);
 }
 
-// ---------------------------------------------------------------------------
-// 7. Exclude glob pattern
-// ---------------------------------------------------------------------------
-
+// Exclude glob pattern
 #[test]
 fn exclude_glob_pattern() {
     let conn = Connection::open_in_memory().unwrap();
@@ -199,10 +178,7 @@ fn exclude_glob_pattern() {
     insta::assert_snapshot!("exclude_glob", output);
 }
 
-// ---------------------------------------------------------------------------
-// 8. schema_migrations excluded by default
-// ---------------------------------------------------------------------------
-
+// schema_migrations excluded by default
 #[test]
 fn schema_migrations_excluded_by_default() {
     let conn = Connection::open_in_memory().unwrap();
@@ -220,10 +196,7 @@ fn schema_migrations_excluded_by_default() {
     insta::assert_snapshot!("schema_migrations_excluded", output);
 }
 
-// ---------------------------------------------------------------------------
-// 9. Multiple tables — ordering and mixed features
-// ---------------------------------------------------------------------------
-
+// Multiple tables — ordering and mixed features
 #[test]
 fn multiple_tables_mixed() {
     let conn = Connection::open_in_memory().unwrap();
@@ -252,10 +225,7 @@ fn multiple_tables_mixed() {
     insta::assert_snapshot!("multiple_tables", output);
 }
 
-// ---------------------------------------------------------------------------
-// 10. TEXT primary key (not a rowid alias)
-// ---------------------------------------------------------------------------
-
+// TEXT primary key (not a rowid alias)
 #[test]
 fn text_primary_key() {
     let conn = Connection::open_in_memory().unwrap();

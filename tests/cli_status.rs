@@ -14,10 +14,7 @@ fn migrations_dir(dir: &TempDir) -> std::path::PathBuf {
     dir.path().join("db/migrations")
 }
 
-// ---------------------------------------------------------------------------
-// 1. All applied — no pending, no drift
-// ---------------------------------------------------------------------------
-
+// All applied — no pending, no drift
 #[test]
 fn status_all_applied() {
     let dir = TempDir::new().unwrap();
@@ -42,10 +39,7 @@ fn status_all_applied() {
     insta::assert_snapshot!("all_applied", output);
 }
 
-// ---------------------------------------------------------------------------
-// 2. Pending present — some not yet applied
-// ---------------------------------------------------------------------------
-
+// Pending present — some not yet applied
 #[test]
 fn status_pending_present() {
     let dir = TempDir::new().unwrap();
@@ -80,10 +74,7 @@ fn status_pending_present() {
     insta::assert_snapshot!("pending_present", output);
 }
 
-// ---------------------------------------------------------------------------
-// 3. Drift present — exits 3
-// ---------------------------------------------------------------------------
-
+// Drift present — exits 3
 #[test]
 fn status_drift_exits_3() {
     let dir = TempDir::new().unwrap();
@@ -113,10 +104,7 @@ fn status_drift_exits_3() {
         .code(predicate::eq(3));
 }
 
-// ---------------------------------------------------------------------------
-// 4. Orphan-applied — DB row with no file on disk
-// ---------------------------------------------------------------------------
-
+// Orphan-applied — DB row with no file on disk
 #[test]
 fn status_orphan_applied() {
     let dir = TempDir::new().unwrap();
@@ -148,10 +136,7 @@ fn status_orphan_applied() {
     insta::assert_snapshot!("orphan_applied", output);
 }
 
-// ---------------------------------------------------------------------------
-// 5. checksum_check=off — drift column shows "—", no drift in summary
-// ---------------------------------------------------------------------------
-
+// checksum_check=off — drift column shows "—", no drift in summary
 #[test]
 fn status_checksum_check_off_hides_drift() {
     let dir = TempDir::new().unwrap();
@@ -187,10 +172,7 @@ fn status_checksum_check_off_hides_drift() {
     insta::assert_snapshot!("checksum_check_off", output);
 }
 
-// ---------------------------------------------------------------------------
-// 6. Empty migrations directory
-// ---------------------------------------------------------------------------
-
+// Empty migrations directory
 #[test]
 fn status_empty_migrations_dir() {
     let dir = TempDir::new().unwrap();
@@ -200,10 +182,7 @@ fn status_empty_migrations_dir() {
     insta::assert_snapshot!("empty_migrations_dir", output);
 }
 
-// ---------------------------------------------------------------------------
-// 7. Missing migrations directory — exits 4
-// ---------------------------------------------------------------------------
-
+// Missing migrations directory — exits 4
 #[test]
 fn status_exits_4_when_migrations_dir_missing() {
     let dir = TempDir::new().unwrap();
@@ -219,10 +198,7 @@ fn status_exits_4_when_migrations_dir_missing() {
         .stderr(predicate::str::contains("migrations directory not found"));
 }
 
-// ---------------------------------------------------------------------------
-// 8. Snapshot pruned — shows "pruned" after snapshot deletion
-// ---------------------------------------------------------------------------
-
+// Snapshot pruned — shows "pruned" after snapshot deletion
 #[test]
 fn status_snapshot_pruned() {
     let dir = TempDir::new().unwrap();
