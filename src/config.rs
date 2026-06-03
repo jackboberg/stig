@@ -55,8 +55,8 @@ pub mod env_source {
         }
     }
 
-    /// Test-only source: reads from an injected [`HashMap`] only. Never touches
-    /// the real process environment, making the hermetic compile-time enforced.
+    /// Reads from an injected [`HashMap`] only. Never touches the real process
+    /// environment, making the hermetic contract compile-time enforced.
     #[derive(Debug, Clone, Default)]
     pub struct MapEnv(pub HashMap<String, String>);
 
@@ -271,8 +271,8 @@ impl Config {
     ///
     /// - `override_path`: explicit config file path (e.g. from `--config`).
     ///   Ignored if `STIG_CONFIG` is set in `env`.
-    /// - `env`: environment-variable source. Use [`ProcessEnv`] in production
-    ///   to read the real process environment; use [`MapEnv`] in tests for
+    /// - `env`: environment-variable source. Use [`env_source::ProcessEnv`] in production
+    ///   to read the real process environment; use [`env_source::MapEnv`] in tests for
     ///   full isolation (structurally cannot read `std::env`).
     /// - `start_dir`: starting directory for the upward config-file search.
     ///   Pass `None` to use the real CWD; pass `Some(path)` in tests to avoid
@@ -872,12 +872,12 @@ mod tests {
     // 9. Hermetic env injection
     // -----------------------------------------------------------------------
 
-    /// When a [`MapEnv`] is injected, `load()` must NOT read the real process
-    /// environment.  Because [`MapEnv`] is structurally incapable of calling
-    /// `std::env::var`, this test is trivially hermetic — no `set_var`,
-    /// `remove_var`, or `#[serial]` needed.
+    /// When a [`MapEnv`] is injected, `load()` consults only the injected map.
+    /// Because [`MapEnv`] is structurally incapable of calling `std::env::var`,
+    /// the hermetic contract is enforced at compile time — no runtime assertion
+    /// against the real process environment is needed.
     #[test]
-    fn injected_env_map_prevents_process_env_leaking_into_load() {
+    fn injected_env_map_is_used_exclusively() {
         let env = empty_env();
         let f = temp_toml("");
         let cfg = Config::load(Some(f.path()), &env, None).unwrap();
