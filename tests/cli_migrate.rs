@@ -26,10 +26,36 @@ fn migrations_dir(dir: &TempDir) -> std::path::PathBuf {
     dir.path().join("db/migrations")
 }
 
-// ---------------------------------------------------------------------------
-// 1. Happy path: fresh DB applies all pending migrations
-// ---------------------------------------------------------------------------
+/// Count snapshot `.db` files in the snapshots directory.
+fn count_snapshot_files(dir: &TempDir) -> usize {
+    let snaps_dir = dir.path().join(".local/db-backups/snapshots");
+    if !snaps_dir.exists() {
+        return 0;
+    }
+    std::fs::read_dir(&snaps_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let name = e.file_name();
+            let n = name.to_string_lossy();
+            n.starts_with("pre-") && n.ends_with(".db")
+        })
+        .count()
+}
 
+/// Query all values from a text column in a table, sorted ascending.
+fn query_column_values(dir: &TempDir, table: &str, column: &str) -> Vec<String> {
+    let conn = Connection::open(dir.path().join("app.db")).unwrap();
+    let mut stmt = conn
+        .prepare(&format!("SELECT {column} FROM {table} ORDER BY {column}"))
+        .unwrap();
+    stmt.query_map([], |row| row.get(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect()
+}
+
+// Happy path: fresh DB applies all pending migrations
 #[test]
 fn migrate_applies_pending() {
     let dir = TempDir::new().unwrap();
@@ -80,10 +106,7 @@ fn migrate_applies_pending() {
     assert_eq!(table_count, 2);
 }
 
-// ---------------------------------------------------------------------------
-// 2. No-op when already up to date
-// ---------------------------------------------------------------------------
-
+// No-op when already up to date
 #[test]
 fn migrate_noop_when_up_to_date() {
     let dir = TempDir::new().unwrap();
@@ -110,10 +133,7 @@ fn migrate_noop_when_up_to_date() {
     assert_eq!(count_schema_migrations(&dir), 1);
 }
 
-// ---------------------------------------------------------------------------
-// 3. Drift detection exits 3
-// ---------------------------------------------------------------------------
-
+// Drift detection exits 3
 #[test]
 fn migrate_exits_3_on_drift() {
     let dir = TempDir::new().unwrap();
@@ -144,10 +164,7 @@ fn migrate_exits_3_on_drift() {
         .stderr(predicate::str::contains("run: stig redo 20240101000000"));
 }
 
-// ---------------------------------------------------------------------------
-// 4. --dry-run does not mutate state
-// ---------------------------------------------------------------------------
-
+// --dry-run does not mutate state
 #[test]
 fn migrate_dry_run_does_not_mutate() {
     let dir = TempDir::new().unwrap();
@@ -189,10 +206,7 @@ fn migrate_dry_run_does_not_mutate() {
     assert_eq!(table_count, 0);
 }
 
-// ---------------------------------------------------------------------------
-// 5. Non-transactional directive is honored
-// ---------------------------------------------------------------------------
-
+// Non-transactional directive is honored
 #[test]
 fn migrate_honors_non_transactional_directive() {
     let dir = TempDir::new().unwrap();
@@ -219,10 +233,7 @@ fn migrate_honors_non_transactional_directive() {
     assert_eq!(count_schema_migrations(&dir), 1);
 }
 
-// ---------------------------------------------------------------------------
-// 6. Missing migrations directory exits 4
-// ---------------------------------------------------------------------------
-
+// Missing migrations directory exits 4
 #[test]
 fn migrate_exits_4_when_migrations_dir_missing() {
     let dir = TempDir::new().unwrap();
@@ -239,10 +250,7 @@ fn migrate_exits_4_when_migrations_dir_missing() {
         .stderr(predicate::str::contains("migrations directory not found"));
 }
 
-// ---------------------------------------------------------------------------
-// 7. Dry-run with no pending migrations is a no-op
-// ---------------------------------------------------------------------------
-
+// Dry-run with no pending migrations is a no-op
 #[test]
 fn migrate_dry_run_noop_when_up_to_date() {
     let dir = TempDir::new().unwrap();
@@ -267,10 +275,7 @@ fn migrate_dry_run_noop_when_up_to_date() {
         ));
 }
 
-// ---------------------------------------------------------------------------
-// 8. auto_snapshot=false — no snapshots taken
-// ---------------------------------------------------------------------------
-
+// auto_snapshot=false — no snapshots taken
 #[test]
 fn migrate_no_snapshot_when_disabled() {
     let dir = TempDir::new().unwrap();
@@ -301,10 +306,7 @@ fn migrate_no_snapshot_when_disabled() {
     assert!(!snapshot_exists(&dir, "20240101000000_create_users"));
 }
 
-// ---------------------------------------------------------------------------
-// 9. checksum_check=false — drift is silently ignored
-// ---------------------------------------------------------------------------
-
+// checksum_check=false — drift is silently ignored
 #[test]
 fn migrate_ignores_drift_when_checksum_check_disabled() {
     let dir = TempDir::new().unwrap();
@@ -349,10 +351,7 @@ fn migrate_ignores_drift_when_checksum_check_disabled() {
     assert_eq!(count_schema_migrations(&dir), 2);
 }
 
-// ---------------------------------------------------------------------------
-// 10. Drift exits 3 even when pending migrations exist
-// ---------------------------------------------------------------------------
-
+// Drift exits 3 even when pending migrations exist
 #[test]
 fn migrate_drift_with_pending_fails_before_apply() {
     let dir = TempDir::new().unwrap();
@@ -409,10 +408,7 @@ fn migrate_drift_with_pending_fails_before_apply() {
     assert_eq!(post_count, 0);
 }
 
-// ---------------------------------------------------------------------------
-// 11. Snapshots are pruned after migration, keeping only snapshot_keep
-// ---------------------------------------------------------------------------
-
+// Snapshots are pruned after migration, keeping only snapshot_keep
 #[test]
 fn migrate_prunes_snapshots() {
     let dir = TempDir::new().unwrap();
@@ -464,4 +460,210 @@ fn migrate_prunes_snapshots() {
         snapshot_exists(&dir, "20240102000000_second"),
         "second snapshot should still exist"
     );
+}
+
+// Drift with pruned snapshot — hard fail suggesting reset
+#[test]
+fn migrate_drift_with_pruned_snapshot_hard_fail() {
+    let dir = TempDir::new().unwrap();
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_users",
+        "CREATE TABLE users (id INTEGER);",
+    );
+    stig_cmd(&dir).arg("migrate").assert().success();
+
+    // Delete the snapshot to simulate pruning.
+    let snaps_dir = dir.path().join(".local/db-backups/snapshots");
+    for entry in std::fs::read_dir(&snaps_dir).unwrap() {
+        let entry = entry.unwrap();
+        if entry.file_name().to_string_lossy().starts_with("pre-") {
+            std::fs::remove_file(entry.path()).unwrap();
+        }
+    }
+
+    // Edit the migration to cause drift.
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_users",
+        "CREATE TABLE users (id INTEGER, name TEXT);",
+    );
+
+    // Should fail with "revert the edit or run: stig reset".
+    stig_cmd(&dir)
+        .arg("migrate")
+        .assert()
+        .failure()
+        .code(3)
+        .stderr(predicate::str::contains(
+            "migration 20240101000000_create_users has been edited since it was applied",
+        ))
+        .stderr(predicate::str::contains(
+            "revert the edit or run: stig reset",
+        ));
+}
+
+// Migrations apply in lexicographic order
+#[test]
+fn migrate_applies_in_lexicographic_order() {
+    let dir = TempDir::new().unwrap();
+    stig_cmd(&dir).arg("init").assert().success();
+
+    // Lexicographic order matches chronological order for zero-padded timestamps.
+    write_migration(
+        &dir,
+        "20240101000000",
+        "first",
+        "CREATE TABLE step (id INTEGER PRIMARY KEY, name TEXT);",
+    );
+    write_migration(
+        &dir,
+        "20240102000000",
+        "second",
+        "INSERT INTO step (name) VALUES ('second');",
+    );
+    write_migration(
+        &dir,
+        "20240103000000",
+        "third",
+        "INSERT INTO step (name) VALUES ('third');",
+    );
+    write_migration(
+        &dir,
+        "20240104000000",
+        "fourth",
+        "INSERT INTO step (name) VALUES ('fourth');",
+    );
+    write_migration(
+        &dir,
+        "20240105000000",
+        "fifth",
+        "INSERT INTO step (name) VALUES ('fifth');",
+    );
+
+    stig_cmd(&dir).arg("migrate").assert().success();
+    assert_eq!(count_schema_migrations(&dir), 5);
+
+    // Verify all rows inserted in order.
+    let values = query_column_values(&dir, "step", "name");
+    assert_eq!(values, vec!["fifth", "fourth", "second", "third"]);
+}
+
+// Snapshot pruning across multiple keep cycles
+#[test]
+fn migrate_prunes_snapshots_across_keep() {
+    let dir = TempDir::new().unwrap();
+
+    let config = indoc::indoc! {r#"
+        database_path  = "app.db"
+        migrations_dir = "db/migrations"
+        backups_dir    = ".local/db-backups"
+        snapshot_keep  = 2
+        auto_snapshot  = true
+        checksum_check = true
+    "#};
+    std::fs::write(dir.path().join("stig.toml"), config).unwrap();
+    std::fs::create_dir_all(dir.path().join("db/migrations")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".local/db-backups/snapshots")).unwrap();
+
+    for i in 1..=4 {
+        let ts = format!("2024010{i}000000");
+        let slug = format!("migration_{i}");
+        let sql = format!("CREATE TABLE t{i} (id INTEGER);");
+        write_migration(&dir, &ts, &slug, &sql);
+    }
+
+    stig_cmd(&dir).arg("migrate").assert().success();
+    assert_eq!(count_schema_migrations(&dir), 4);
+
+    // Only 2 snapshots should remain (the newest two).
+    assert_eq!(count_snapshot_files(&dir), 2);
+    assert!(
+        !snapshot_exists(&dir, "20240101000000_migration_1"),
+        "oldest snapshot should be pruned"
+    );
+    assert!(
+        !snapshot_exists(&dir, "20240102000000_migration_2"),
+        "second snapshot should be pruned"
+    );
+    assert!(snapshot_exists(&dir, "20240103000000_migration_3"));
+    assert!(snapshot_exists(&dir, "20240104000000_migration_4"));
+}
+
+// Empty migration (comments only) succeeds
+#[test]
+fn migrate_empty_migration_succeeds() {
+    let dir = TempDir::new().unwrap();
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(&dir, "20240101000000", "empty", "-- just a comment\n\n");
+
+    stig_cmd(&dir).arg("migrate").assert().success();
+    assert_eq!(count_schema_migrations(&dir), 1);
+}
+
+// Non-transactional migration with PRAGMA
+#[test]
+fn migrate_non_transactional_with_pragma() {
+    let dir = TempDir::new().unwrap();
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "with_pragma",
+        "stig: non-transactional\nPRAGMA journal_mode = WAL;\nCREATE TABLE x (id INTEGER);\n",
+    );
+
+    stig_cmd(&dir).arg("migrate").assert().success();
+    assert_eq!(count_schema_migrations(&dir), 1);
+    assert!(query_column_values(&dir, "sqlite_master", "name").contains(&"x".to_string()));
+}
+
+// Large migration set with pruning at scale
+#[test]
+fn migrate_large_set_with_pruning() {
+    let dir = TempDir::new().unwrap();
+
+    let config = indoc::indoc! {r#"
+        database_path  = "app.db"
+        migrations_dir = "db/migrations"
+        backups_dir    = ".local/db-backups"
+        snapshot_keep  = 3
+        auto_snapshot  = true
+        checksum_check = true
+    "#};
+    std::fs::write(dir.path().join("stig.toml"), config).unwrap();
+    std::fs::create_dir_all(dir.path().join("db/migrations")).unwrap();
+    std::fs::create_dir_all(dir.path().join(".local/db-backups/snapshots")).unwrap();
+
+    for i in 0..20 {
+        let ts = format!("202401{:02}000000", i + 1);
+        let slug = format!("migration_{:02}", i + 1);
+        let sql = format!("CREATE TABLE t{} (id INTEGER);", i + 1);
+        write_migration(&dir, &ts, &slug, &sql);
+    }
+
+    stig_cmd(&dir).arg("migrate").assert().success();
+    assert_eq!(count_schema_migrations(&dir), 20);
+
+    // All 20 tables should exist.
+    let conn = Connection::open(dir.path().join("app.db")).unwrap();
+    for i in 1..=20 {
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+                [format!("t{i}")],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1, "table t{i} should exist");
+    }
+
+    // Only 3 snapshots should remain.
+    assert_eq!(count_snapshot_files(&dir), 3);
 }

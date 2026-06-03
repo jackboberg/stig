@@ -7,10 +7,7 @@ use tempfile::TempDir;
 
 use common::{stig_cmd, write_migration};
 
-// ---------------------------------------------------------------------------
-// 1. List with no backups
-// ---------------------------------------------------------------------------
-
+// List with no backups
 #[test]
 fn backups_list_empty() {
     let dir = TempDir::new().unwrap();
@@ -23,10 +20,7 @@ fn backups_list_empty() {
         .stdout(predicate::str::contains("resets (0 of max 3):"));
 }
 
-// ---------------------------------------------------------------------------
-// 2. List after migrate shows snapshots
-// ---------------------------------------------------------------------------
-
+// List after migrate shows snapshots
 #[test]
 fn backups_list_populated() {
     let dir = TempDir::new().unwrap();
@@ -50,10 +44,7 @@ fn backups_list_populated() {
         .stdout(predicate::str::contains("ago"));
 }
 
-// ---------------------------------------------------------------------------
-// 3. List after reset shows resets
-// ---------------------------------------------------------------------------
-
+// List after reset shows resets
 #[test]
 fn backups_list_after_reset() {
     let dir = TempDir::new().unwrap();
@@ -77,10 +68,7 @@ fn backups_list_after_reset() {
         .stdout(predicate::str::contains(".db"));
 }
 
-// ---------------------------------------------------------------------------
-// 4. Prune with --yes removes old snapshots
-// ---------------------------------------------------------------------------
-
+// Prune with --yes removes old snapshots
 #[test]
 fn backups_prune_yes() {
     let dir = TempDir::new().unwrap();
@@ -134,10 +122,7 @@ fn backups_prune_yes() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// 5. Prune without --yes, declined via stdin
-// ---------------------------------------------------------------------------
-
+// Prune without --yes, declined via stdin
 #[test]
 fn backups_prune_declined() {
     let dir = TempDir::new().unwrap();
@@ -168,9 +153,7 @@ fn backups_prune_declined() {
     assert_eq!(count_db_files(&snapshots_dir), 1);
 }
 
-// ---------------------------------------------------------------------------
-// helpers
-// ---------------------------------------------------------------------------
+// Helpers
 
 /// Count `.db` files in a directory.
 fn count_db_files(dir: &std::path::Path) -> usize {
@@ -182,4 +165,38 @@ fn count_db_files(dir: &std::path::Path) -> usize {
         .filter_map(|e| e.ok())
         .filter(|e| e.file_name().to_string_lossy().ends_with(".db"))
         .count()
+}
+
+// List shows correct counts after migrate then reset
+#[test]
+fn backups_list_counts_after_migrate_and_reset() {
+    let dir = TempDir::new().unwrap();
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_foo",
+        "CREATE TABLE foo (id INTEGER);",
+    );
+
+    // After migrate: 1 snapshot, 0 resets.
+    stig_cmd(&dir).arg("migrate").assert().success();
+    stig_cmd(&dir)
+        .arg("backups")
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("snapshots (1 of max 5):"))
+        .stdout(predicate::str::contains("resets (0 of max 3):"));
+
+    // After reset: 1 snapshot, 1 reset.
+    stig_cmd(&dir).arg("reset").arg("--yes").assert().success();
+    stig_cmd(&dir)
+        .arg("backups")
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("snapshots (1 of max 5):"))
+        .stdout(predicate::str::contains("resets (1 of max 3):"));
 }
