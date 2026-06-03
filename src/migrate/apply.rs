@@ -212,7 +212,7 @@ fn execute_non_transactional(
             if let Err(restore_err) = snapshot::restore_snapshot(version, db_path, snapshots_dir) {
                 return Err(anyhow::anyhow!(
                     "migration {filename} ({version}) failed; \
-                     attempted to restore pre-migration snapshot but also failed: {restore_err}"
+                     attempted to restore pre-migration snapshot but also failed: {restore_err}\nCaused by: {e}"
                 ));
             }
             return Err(anyhow::anyhow!(
