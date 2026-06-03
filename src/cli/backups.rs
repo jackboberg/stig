@@ -4,6 +4,7 @@ use anyhow::Context;
 
 use crate::cli::BackupsCommand;
 use crate::config::Config;
+use crate::config::env_source::ProcessEnv;
 use crate::errors::CliError;
 use crate::snapshot;
 
@@ -16,7 +17,7 @@ pub fn run(command: BackupsCommand) -> anyhow::Result<()> {
 }
 
 fn list() -> anyhow::Result<()> {
-    let config = Config::load(None, None, None)?;
+    let config = Config::load(None, &ProcessEnv, None)?;
 
     let backups_dir = config.project_root.join(&config.backups_dir);
     let snapshots_dir = backups_dir.join("snapshots");
@@ -54,7 +55,7 @@ fn list() -> anyhow::Result<()> {
 }
 
 fn prune(yes: bool) -> anyhow::Result<()> {
-    let config = Config::load(None, None, None)?;
+    let config = Config::load(None, &ProcessEnv, None)?;
 
     confirm_or_abort(yes)?;
 

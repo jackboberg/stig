@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context as _;
 
 use crate::config::Config;
+use crate::config::env_source::ProcessEnv;
 use crate::db::Db;
 use crate::errors::CliError;
 
@@ -40,7 +41,7 @@ pub fn run() -> anyhow::Result<()> {
 /// Return an error (exit 2) if a `stig.toml` already exists anywhere in the
 /// upward search path from CWD.
 fn guard_no_existing_config() -> anyhow::Result<()> {
-    if let Some(existing) = Config::resolve_config_path(None, None, None) {
+    if let Some(existing) = Config::resolve_config_path(None, &ProcessEnv, None) {
         return Err(CliError::Usage(format!("{} already exists", existing.display())).into());
     }
     Ok(())

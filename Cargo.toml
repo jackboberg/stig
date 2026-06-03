@@ -32,5 +32,4 @@ assert_cmd = "2.2.2"
 indoc = "2"
 insta = { version = "1.47.2", features = ["yaml"] }
 predicates = "3.1.4"
-serial_test = "3"
 tempfile = "3.27.0"

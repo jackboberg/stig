@@ -10,12 +10,70 @@
 //! 3. `stig.toml` values
 //! 4. Built-in defaults ([`Default`] impl)
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::errors::CliError;
+
+// ---------------------------------------------------------------------------
+// Environment source abstraction
+// ---------------------------------------------------------------------------
+
+/// Sealed trait for environment-variable sources. Prevents downstream crates
+/// from implementing their own variants — only [`ProcessEnv`] and [`MapEnv`]
+/// are valid.
+pub mod env_source {
+    use std::collections::HashMap;
+
+    mod sealed {
+        pub trait Sealed {}
+    }
+
+    /// Abstraction over environment-variable lookups.
+    pub trait EnvSource: sealed::Sealed {
+        /// Load `.env` file if applicable (no-op for map-backed sources).
+        fn load_dotenv(&self);
+
+        /// Look up a single key.
+        fn get_var(&self, key: &str) -> Option<String>;
+    }
+
+    /// Production source: reads the real process environment and loads `.env`.
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct ProcessEnv;
+
+    impl sealed::Sealed for ProcessEnv {}
+
+    impl EnvSource for ProcessEnv {
+        fn load_dotenv(&self) {
+            dotenvy::dotenv().ok();
+        }
+
+        fn get_var(&self, key: &str) -> Option<String> {
+            std::env::var(key).ok()
+        }
+    }
+
+    /// Reads from an injected [`HashMap`] only. Never touches the real process
+    /// environment, making the hermetic contract compile-time enforced.
+    #[derive(Debug, Clone, Default)]
+    pub struct MapEnv(pub HashMap<String, String>);
+
+    impl sealed::Sealed for MapEnv {}
+
+    impl EnvSource for MapEnv {
+        fn load_dotenv(&self) {
+            // No-op: tests must not depend on .env files.
+        }
+
+        fn get_var(&self, key: &str) -> Option<String> {
+            self.0.get(key).cloned()
+        }
+    }
+}
+
+use env_source::EnvSource;
 
 // ---------------------------------------------------------------------------
 // Sub-structs
@@ -213,8 +271,9 @@ impl Config {
     ///
     /// - `override_path`: explicit config file path (e.g. from `--config`).
     ///   Ignored if `STIG_CONFIG` is set in `env`.
-    /// - `env`: environment variable map. Pass `None` to use the real process
-    ///   environment; pass `Some(&map)` in tests for full isolation.
+    /// - `env`: environment-variable source. Use [`env_source::ProcessEnv`] in production
+    ///   to read the real process environment; use [`env_source::MapEnv`] in tests for
+    ///   full isolation (structurally cannot read `std::env`).
     /// - `start_dir`: starting directory for the upward config-file search.
     ///   Pass `None` to use the real CWD; pass `Some(path)` in tests to avoid
     ///   touching process state. Note: `start_dir` only controls where the
@@ -229,16 +288,12 @@ impl Config {
     /// as "invalid config").
     ///
     /// A missing config file is **not** an error — defaults are used.
-    pub fn load(
+    pub fn load<E: EnvSource>(
         override_path: Option<&Path>,
-        env: Option<&HashMap<String, String>>,
+        env: &E,
         start_dir: Option<&Path>,
     ) -> Result<Self, CliError> {
-        // Load .env when using the real process environment. Skip when an
-        // injected env map is provided so tests remain fully hermetic.
-        if env.is_none() {
-            dotenvy::dotenv().ok();
-        }
+        env.load_dotenv();
 
         // Resolve the config file path.
         let config_path = Self::resolve_config_path(override_path, env, start_dir);
@@ -333,15 +388,15 @@ impl Config {
     /// 3. Upward search from `start_dir` (or CWD) for `stig.toml`
     ///
     /// Returns `None` if no config file is found (not an error).
-    pub(crate) fn resolve_config_path(
+    pub(crate) fn resolve_config_path<E: EnvSource>(
         override_path: Option<&Path>,
-        env: Option<&HashMap<String, String>>,
+        env: &E,
         start_dir: Option<&Path>,
     ) -> Option<PathBuf> {
         // 1. STIG_CONFIG env var — always passed through so the caller gets a
         // clear IO error if the file doesn't exist rather than silently falling
         // back to defaults.
-        if let Some(p) = Self::env_get(env, "STIG_CONFIG") {
+        if let Some(p) = env.get_var("STIG_CONFIG") {
             return Some(PathBuf::from(p));
         }
 
@@ -376,43 +431,35 @@ impl Config {
         }
     }
 
-    /// Look up an environment variable, using the provided map when in test
-    /// mode or falling back to the real process environment.
-    fn env_get(env: Option<&HashMap<String, String>>, key: &str) -> Option<String> {
-        match env {
-            Some(map) => map.get(key).cloned(),
-            None => std::env::var(key).ok(),
-        }
-    }
-
     /// Apply all environment-variable overrides to `self`.
-    fn apply_env_overrides(&mut self, env: Option<&HashMap<String, String>>) {
+    fn apply_env_overrides<E: EnvSource>(&mut self, env: &E) {
         // STIG_DATABASE_PATH or DATABASE_PATH
-        if let Some(v) =
-            Self::env_get(env, "STIG_DATABASE_PATH").or_else(|| Self::env_get(env, "DATABASE_PATH"))
+        if let Some(v) = env
+            .get_var("STIG_DATABASE_PATH")
+            .or_else(|| env.get_var("DATABASE_PATH"))
         {
             self.database_path = v;
         }
 
         // STIG_MIGRATIONS_DIR
-        if let Some(v) = Self::env_get(env, "STIG_MIGRATIONS_DIR") {
+        if let Some(v) = env.get_var("STIG_MIGRATIONS_DIR") {
             self.migrations_dir = v;
         }
 
         // STIG_BACKUPS_DIR
-        if let Some(v) = Self::env_get(env, "STIG_BACKUPS_DIR") {
+        if let Some(v) = env.get_var("STIG_BACKUPS_DIR") {
             self.backups_dir = v;
         }
 
         // STIG_NO_SNAPSHOT — any non-empty value disables snapshots
-        if let Some(v) = Self::env_get(env, "STIG_NO_SNAPSHOT")
+        if let Some(v) = env.get_var("STIG_NO_SNAPSHOT")
             && !v.is_empty()
         {
             self.auto_snapshot = false;
         }
 
         // STIG_NO_CHECKSUM — any non-empty value disables checksum verification
-        if let Some(v) = Self::env_get(env, "STIG_NO_CHECKSUM")
+        if let Some(v) = env.get_var("STIG_NO_CHECKSUM")
             && !v.is_empty()
         {
             self.checksum_check = false;
@@ -442,39 +489,14 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use env_source::MapEnv;
     use indoc::indoc;
+    use std::collections::HashMap;
     use std::io::Write;
     use tempfile::{NamedTempFile, TempDir};
 
-    /// RAII guard that sets an environment variable on construction and removes
-    /// it on drop — including on panic/unwind.  This avoids leaving sentinel
-    /// values in the process environment if a test fails mid-way.
-    ///
-    /// `set_var` / `remove_var` are still `unsafe` on stable Rust; mark the
-    /// test `#[serial_test::serial]` to serialise it against other tests that
-    /// read or write the same key, since the process environment is global state.
-    struct EnvGuard {
-        key: &'static str,
-    }
-
-    impl EnvGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            // SAFETY: caller must hold #[serial_test::serial] to prevent
-            // concurrent access to the process environment from other tests.
-            unsafe { std::env::set_var(key, value) };
-            EnvGuard { key }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            // SAFETY: same requirement as set().
-            unsafe { std::env::remove_var(self.key) };
-        }
-    }
-
-    fn empty_env() -> HashMap<String, String> {
-        HashMap::new()
+    fn empty_env() -> MapEnv {
+        MapEnv(HashMap::new())
     }
 
     /// Write `contents` to a fresh [`NamedTempFile`] and return it.
@@ -493,7 +515,7 @@ mod tests {
     fn upward_search_finds_no_file_returns_defaults() {
         // Use a temp dir that is guaranteed to contain no stig.toml.
         let dir = TempDir::new().unwrap();
-        let cfg = Config::load(None, Some(&empty_env()), Some(dir.path())).unwrap();
+        let cfg = Config::load(None, &empty_env(), Some(dir.path())).unwrap();
         // Config values should all be defaults.
         let defaults = Config::default();
         assert_eq!(cfg.database_path, defaults.database_path);
@@ -511,14 +533,14 @@ mod tests {
         // path is absent without relying on a hard-coded system path.
         let dir = TempDir::new().unwrap();
         let absent = dir.path().join("no_such_stig.toml");
-        let result = Config::load(Some(&absent), Some(&empty_env()), None);
+        let result = Config::load(Some(&absent), &empty_env(), None);
         assert!(matches!(result, Err(CliError::Usage(_))));
     }
 
     #[test]
     fn empty_config_file_returns_defaults() {
         let f = temp_toml("");
-        let cfg = Config::load(Some(f.path()), Some(&empty_env()), None).unwrap();
+        let cfg = Config::load(Some(f.path()), &empty_env(), None).unwrap();
         let defaults = Config::default();
         assert_eq!(cfg.database_path, defaults.database_path);
         assert_eq!(cfg.migrations_dir, defaults.migrations_dir);
@@ -541,7 +563,7 @@ mod tests {
         let f = temp_toml(indoc! {r#"
             database_path = "my.db"
         "#});
-        let cfg = Config::load(Some(f.path()), Some(&empty_env()), None).unwrap();
+        let cfg = Config::load(Some(f.path()), &empty_env(), None).unwrap();
         assert_eq!(cfg.database_path, "my.db");
         assert_eq!(cfg.migrations_dir, "db/migrations"); // default
         assert_eq!(cfg.snapshot_keep, 5); // default
@@ -574,7 +596,7 @@ mod tests {
             exclude = ["sqlite_%"]
         "#});
 
-        let cfg = Config::load(Some(f.path()), Some(&empty_env()), None).unwrap();
+        let cfg = Config::load(Some(f.path()), &empty_env(), None).unwrap();
         assert_eq!(cfg.database_path, "prod.db");
         assert_eq!(cfg.migrations_dir, "migrations");
         assert_eq!(cfg.backups_dir, "bk");
@@ -605,10 +627,9 @@ mod tests {
             database_path = "file.db"
         "#});
 
-        let mut env = empty_env();
-        env.insert("STIG_DATABASE_PATH".into(), "env.db".into());
+        let env = MapEnv([("STIG_DATABASE_PATH".into(), "env.db".into())].into());
 
-        let cfg = Config::load(Some(f.path()), Some(&env), None).unwrap();
+        let cfg = Config::load(Some(f.path()), &env, None).unwrap();
         assert_eq!(cfg.database_path, "env.db");
     }
 
@@ -618,10 +639,9 @@ mod tests {
             database_path = "file.db"
         "#});
 
-        let mut env = empty_env();
-        env.insert("DATABASE_PATH".into(), "fallback.db".into());
+        let env = MapEnv([("DATABASE_PATH".into(), "fallback.db".into())].into());
 
-        let cfg = Config::load(Some(f.path()), Some(&env), None).unwrap();
+        let cfg = Config::load(Some(f.path()), &env, None).unwrap();
         assert_eq!(cfg.database_path, "fallback.db");
     }
 
@@ -629,11 +649,15 @@ mod tests {
     fn env_stig_database_path_takes_priority_over_database_path() {
         let f = temp_toml("");
 
-        let mut env = empty_env();
-        env.insert("STIG_DATABASE_PATH".into(), "stig.db".into());
-        env.insert("DATABASE_PATH".into(), "other.db".into());
+        let env = MapEnv(
+            [
+                ("STIG_DATABASE_PATH".into(), "stig.db".into()),
+                ("DATABASE_PATH".into(), "other.db".into()),
+            ]
+            .into(),
+        );
 
-        let cfg = Config::load(Some(f.path()), Some(&env), None).unwrap();
+        let cfg = Config::load(Some(f.path()), &env, None).unwrap();
         assert_eq!(cfg.database_path, "stig.db");
     }
 
@@ -641,10 +665,9 @@ mod tests {
     fn env_stig_migrations_dir_overrides_file() {
         let f = temp_toml("");
 
-        let mut env = empty_env();
-        env.insert("STIG_MIGRATIONS_DIR".into(), "custom/migrations".into());
+        let env = MapEnv([("STIG_MIGRATIONS_DIR".into(), "custom/migrations".into())].into());
 
-        let cfg = Config::load(Some(f.path()), Some(&env), None).unwrap();
+        let cfg = Config::load(Some(f.path()), &env, None).unwrap();
         assert_eq!(cfg.migrations_dir, "custom/migrations");
     }
 
@@ -652,10 +675,9 @@ mod tests {
     fn env_stig_backups_dir_overrides_file() {
         let f = temp_toml("");
 
-        let mut env = empty_env();
-        env.insert("STIG_BACKUPS_DIR".into(), "custom/backups".into());
+        let env = MapEnv([("STIG_BACKUPS_DIR".into(), "custom/backups".into())].into());
 
-        let cfg = Config::load(Some(f.path()), Some(&env), None).unwrap();
+        let cfg = Config::load(Some(f.path()), &env, None).unwrap();
         assert_eq!(cfg.backups_dir, "custom/backups");
     }
 
@@ -663,10 +685,9 @@ mod tests {
     fn env_stig_no_snapshot_disables_auto_snapshot() {
         let f = temp_toml("auto_snapshot = true");
 
-        let mut env = empty_env();
-        env.insert("STIG_NO_SNAPSHOT".into(), "1".into());
+        let env = MapEnv([("STIG_NO_SNAPSHOT".into(), "1".into())].into());
 
-        let cfg = Config::load(Some(f.path()), Some(&env), None).unwrap();
+        let cfg = Config::load(Some(f.path()), &env, None).unwrap();
         assert!(!cfg.auto_snapshot);
     }
 
@@ -674,10 +695,9 @@ mod tests {
     fn env_stig_no_snapshot_empty_string_does_not_disable() {
         let f = temp_toml("auto_snapshot = true");
 
-        let mut env = empty_env();
-        env.insert("STIG_NO_SNAPSHOT".into(), "".into());
+        let env = MapEnv([("STIG_NO_SNAPSHOT".into(), "".into())].into());
 
-        let cfg = Config::load(Some(f.path()), Some(&env), None).unwrap();
+        let cfg = Config::load(Some(f.path()), &env, None).unwrap();
         assert!(cfg.auto_snapshot);
     }
 
@@ -685,10 +705,9 @@ mod tests {
     fn env_stig_no_checksum_disables_checksum_check() {
         let f = temp_toml("checksum_check = true");
 
-        let mut env = empty_env();
-        env.insert("STIG_NO_CHECKSUM".into(), "true".into());
+        let env = MapEnv([("STIG_NO_CHECKSUM".into(), "true".into())].into());
 
-        let cfg = Config::load(Some(f.path()), Some(&env), None).unwrap();
+        let cfg = Config::load(Some(f.path()), &env, None).unwrap();
         assert!(!cfg.checksum_check);
     }
 
@@ -702,10 +721,9 @@ mod tests {
             database_path = "file.db"
         "#});
 
-        let mut env = empty_env();
-        env.insert("STIG_DATABASE_PATH".into(), "env.db".into());
+        let env = MapEnv([("STIG_DATABASE_PATH".into(), "env.db".into())].into());
 
-        let mut cfg = Config::load(Some(f.path()), Some(&env), None).unwrap();
+        let mut cfg = Config::load(Some(f.path()), &env, None).unwrap();
         assert_eq!(cfg.database_path, "env.db"); // env beat file
 
         let overrides = CliOverrides {
@@ -720,7 +738,7 @@ mod tests {
     fn cli_overrides_partial_leaves_other_fields_unchanged() {
         let f = temp_toml("");
 
-        let mut cfg = Config::load(Some(f.path()), Some(&empty_env()), None).unwrap();
+        let mut cfg = Config::load(Some(f.path()), &empty_env(), None).unwrap();
         let original_migrations_dir = cfg.migrations_dir.clone();
 
         let overrides = CliOverrides {
@@ -736,7 +754,7 @@ mod tests {
     fn cli_override_auto_snapshot_false() {
         let f = temp_toml("auto_snapshot = true");
 
-        let mut cfg = Config::load(Some(f.path()), Some(&empty_env()), None).unwrap();
+        let mut cfg = Config::load(Some(f.path()), &empty_env(), None).unwrap();
         assert!(cfg.auto_snapshot);
 
         let overrides = CliOverrides {
@@ -755,7 +773,7 @@ mod tests {
     fn invalid_toml_returns_usage_error() {
         let f = temp_toml("this is not : valid = toml [[[");
 
-        let result = Config::load(Some(f.path()), Some(&empty_env()), None);
+        let result = Config::load(Some(f.path()), &empty_env(), None);
         assert!(result.is_err());
         assert!(
             matches!(result.unwrap_err(), CliError::Usage(_)),
@@ -768,7 +786,7 @@ mod tests {
         // snapshot_keep expects u32, not a string
         let f = temp_toml(r#"snapshot_keep = "five""#);
 
-        let result = Config::load(Some(f.path()), Some(&empty_env()), None);
+        let result = Config::load(Some(f.path()), &empty_env(), None);
         assert!(matches!(result, Err(CliError::Usage(_))));
     }
 
@@ -784,13 +802,15 @@ mod tests {
         // File B: via override_path argument (should be ignored)
         let fb = temp_toml(r#"database_path = "from_override.db""#);
 
-        let mut env = empty_env();
-        env.insert(
-            "STIG_CONFIG".into(),
-            fa.path().to_str().unwrap().to_string(),
+        let env = MapEnv(
+            [(
+                "STIG_CONFIG".into(),
+                fa.path().to_str().unwrap().to_string(),
+            )]
+            .into(),
         );
 
-        let cfg = Config::load(Some(fb.path()), Some(&env), None).unwrap();
+        let cfg = Config::load(Some(fb.path()), &env, None).unwrap();
         assert_eq!(cfg.database_path, "from_stig_config.db");
     }
 
@@ -815,13 +835,15 @@ mod tests {
         let config_file = dir.path().join("stig.toml");
         std::fs::write(&config_file, r#"database_path = "app.db""#).unwrap();
 
-        let mut env = empty_env();
-        env.insert(
-            "STIG_CONFIG".into(),
-            config_file.to_str().unwrap().to_string(),
+        let env = MapEnv(
+            [(
+                "STIG_CONFIG".into(),
+                config_file.to_str().unwrap().to_string(),
+            )]
+            .into(),
         );
 
-        let cfg = Config::load(None, Some(&env), None).unwrap();
+        let cfg = Config::load(None, &env, None).unwrap();
         assert_eq!(cfg.database_path, "app.db");
         assert_eq!(cfg.project_root, dir.path().canonicalize().unwrap());
         assert_ne!(cfg.project_root, std::path::PathBuf::new());
@@ -840,12 +862,7 @@ mod tests {
 
         // Pass a different start_dir — project_root must still come from the
         // config file's location, not from start_dir.
-        let cfg = Config::load(
-            Some(&config_file),
-            Some(&empty_env()),
-            Some(start_dir.path()),
-        )
-        .unwrap();
+        let cfg = Config::load(Some(&config_file), &empty_env(), Some(start_dir.path())).unwrap();
 
         assert_eq!(cfg.project_root, config_dir.path().canonicalize().unwrap());
         assert_ne!(cfg.project_root, start_dir.path().canonicalize().unwrap());
@@ -855,35 +872,17 @@ mod tests {
     // 9. Hermetic env injection
     // -----------------------------------------------------------------------
 
-    /// When an env map is injected, `load()` must NOT read the real process
-    /// environment — even if a relevant env var is set in the process env.
-    ///
-    /// This test sets `STIG_DATABASE_PATH` in the real process environment for
-    /// the duration of the test via an [`EnvGuard`] (which removes the var on
-    /// drop, even on panic), then calls `load()` with an injected empty map.
-    /// The resulting `database_path` must be the default, proving that
-    /// `load()` consulted the injected map rather than `std::env::var`.
-    ///
-    /// Marked `#[serial]` because it mutates the process environment, which is
-    /// global state that could interfere with other tests running concurrently.
+    /// When a [`MapEnv`] is injected, `load()` consults only the injected map.
+    /// Because [`MapEnv`] is structurally incapable of calling `std::env::var`,
+    /// the hermetic contract is enforced at compile time — no runtime assertion
+    /// against the real process environment is needed.
     #[test]
-    #[serial_test::serial]
-    fn injected_env_map_prevents_process_env_leaking_into_load() {
-        const KEY: &str = "STIG_DATABASE_PATH";
-        const SENTINEL: &str = "__stig_test_sentinel__.db";
-
-        // Guard removes KEY from the env on drop — including on panic.
-        let _guard = EnvGuard::set(KEY, SENTINEL);
-
+    fn injected_env_map_is_used_exclusively() {
+        let env = empty_env();
         let f = temp_toml("");
-        let cfg = Config::load(Some(f.path()), Some(&empty_env()), None).unwrap();
+        let cfg = Config::load(Some(f.path()), &env, None).unwrap();
 
-        // The process env had STIG_DATABASE_PATH=SENTINEL, but the injected
-        // empty map should have been used instead.
-        assert_ne!(
-            cfg.database_path, SENTINEL,
-            "load() must not read the real process env when an injected map is provided"
-        );
+        // With an empty injected map, no env overrides should apply.
         assert_eq!(cfg.database_path, Config::default().database_path);
     }
 
@@ -902,7 +901,7 @@ mod tests {
         };
         original.write(&path).unwrap();
 
-        let loaded = Config::load(Some(&path), Some(&empty_env()), None).unwrap();
+        let loaded = Config::load(Some(&path), &empty_env(), None).unwrap();
         assert_eq!(loaded.database_path, original.database_path);
         assert_eq!(loaded.migrations_dir, original.migrations_dir);
         assert_eq!(loaded.backups_dir, original.backups_dir);
@@ -933,7 +932,7 @@ mod tests {
         };
         original.write(&path).unwrap();
 
-        let loaded = Config::load(Some(&path), Some(&empty_env()), None).unwrap();
+        let loaded = Config::load(Some(&path), &empty_env(), None).unwrap();
         assert_eq!(loaded.database_path, "prod.db");
         assert_eq!(loaded.migrations_dir, "schema/migrations");
         assert_eq!(loaded.snapshot_keep, 10);
@@ -985,7 +984,7 @@ mod tests {
         };
         original.write(&path).unwrap();
 
-        let loaded = Config::load(Some(&path), Some(&empty_env()), None).unwrap();
+        let loaded = Config::load(Some(&path), &empty_env(), None).unwrap();
         assert_eq!(loaded.generate.len(), 1);
         assert_eq!(
             loaded.generate[0].extra.get("indent"),

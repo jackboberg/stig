@@ -50,7 +50,7 @@ entire invocation, and close before any file moves (redo, reset).
 - **Shared helpers**: `tests/common/mod.rs` provides `stig_cmd(dir)` and `write_migration(dir, ts, slug, sql)`.
 - **Isolation**: every test uses `tempfile::TempDir`; `stig_cmd()` clears all `STIG_*` env vars to prevent shell leakage.
 - **Snapshots**: `insta` with YAML feature for status output (`tests/snapshots/`).
-- **Serialization**: use `#[serial_test::serial]` for tests that mutate process environment.
+- **Env isolation**: config tests use `MapEnv(HashMap)` injected into `Config::load()` — structurally cannot read `std::env`, no `set_var`/`serial` needed.
 
 Test pattern:
 ```rust

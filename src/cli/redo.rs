@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::Context;
 
 use crate::config::Config;
+use crate::config::env_source::ProcessEnv;
 use crate::db::{Db, delete_from_version, ensure_schema_migrations};
 use crate::errors::CliError;
 use crate::migrate::apply;
@@ -12,7 +13,7 @@ use crate::snapshot;
 
 /// Run `stig redo [<version>] [--yes]`.
 pub fn run(version: Option<String>, yes: bool) -> anyhow::Result<()> {
-    let config = Config::load(None, None, None)?;
+    let config = Config::load(None, &ProcessEnv, None)?;
 
     let migrations_dir = config.project_root.join(&config.migrations_dir);
     if !migrations_dir.is_dir() {
