@@ -42,10 +42,10 @@ impl CodegenTarget for TypeScriptTarget {
 
         for table in &tables {
             let columns = get_columns(conn, &table.name)?;
-            let enums = extract_enums(table.sql.as_deref());
-            let rowid_alias = detect_rowid_alias(&columns, table.sql.as_deref());
+            let parsed = parse_create_table(table.sql.as_deref());
+            let rowid_alias = detect_rowid_alias(&columns, parsed.without_rowid);
 
-            for (col_name, values) in &enums {
+            for (col_name, values) in &parsed.enums {
                 all_enums.insert(format!("{}_{}", table.name, col_name), values.clone());
             }
 
@@ -142,25 +142,44 @@ fn get_columns(conn: &Connection, table: &str) -> Result<Vec<ColumnInfo>, Codege
 // CHECK-IN enum extraction
 // ---------------------------------------------------------------------------
 
-/// Extract `CHECK (<col> IN ('a','b',...))` constraints from a CREATE TABLE
-/// statement. Returns a map of column name → list of string literal values.
-fn extract_enums(sql: Option<&str>) -> BTreeMap<String, Vec<String>> {
+/// Parsed information from a CREATE TABLE statement.
+struct ParsedCreateTable {
+    enums: BTreeMap<String, Vec<String>>,
+    without_rowid: bool,
+}
+
+/// Parse a CREATE TABLE statement to extract CHECK-IN constraints and
+/// the `WITHOUT ROWID` flag.
+fn parse_create_table(sql: Option<&str>) -> ParsedCreateTable {
     let sql = match sql {
         Some(s) => s,
-        None => return BTreeMap::new(),
+        None => {
+            return ParsedCreateTable {
+                enums: BTreeMap::new(),
+                without_rowid: false,
+            };
+        }
     };
 
     let stmts = match Parser::parse_sql(&SQLiteDialect {}, sql) {
         Ok(stmts) => stmts,
-        Err(_) => return BTreeMap::new(),
+        Err(_) => {
+            return ParsedCreateTable {
+                enums: BTreeMap::new(),
+                without_rowid: false,
+            };
+        }
     };
 
     let mut enums = BTreeMap::new();
+    let mut without_rowid = false;
 
     for stmt in &stmts {
         let Statement::CreateTable(create) = stmt else {
             continue;
         };
+
+        without_rowid = create.without_rowid;
 
         // Check table-level constraints.
         for constraint in &create.constraints {
@@ -184,7 +203,10 @@ fn extract_enums(sql: Option<&str>) -> BTreeMap<String, Vec<String>> {
         }
     }
 
-    enums
+    ParsedCreateTable {
+        enums,
+        without_rowid,
+    }
 }
 
 /// Try to extract an IN-list from a table-level CHECK constraint.
@@ -242,13 +264,10 @@ fn extract_in_list_values(
 ///
 /// Returns the alias column name if:
 /// - Exactly one column has `pk = 1` and declared type is exactly `INTEGER`.
-/// - The CREATE TABLE statement does NOT contain `WITHOUT ROWID`.
-fn detect_rowid_alias(columns: &[ColumnInfo], sql: Option<&str>) -> Option<String> {
-    if let Some(sql) = sql {
-        let upper = sql.to_uppercase();
-        if upper.contains("WITHOUT ROWID") {
-            return None;
-        }
+/// - The table does NOT use `WITHOUT ROWID`.
+fn detect_rowid_alias(columns: &[ColumnInfo], without_rowid: bool) -> Option<String> {
+    if without_rowid {
+        return None;
     }
 
     let pk_cols: Vec<&ColumnInfo> = columns.iter().filter(|c| c.pk > 0).collect();
@@ -571,19 +590,20 @@ mod tests {
     #[test]
     fn extract_enums_simple() {
         let sql = "CREATE TABLE posts (type TEXT CHECK (type IN ('entry', 'event')))";
-        let enums = extract_enums(Some(sql));
+        let parsed = parse_create_table(Some(sql));
         assert_eq!(
-            enums.get("type"),
+            parsed.enums.get("type"),
             Some(&vec!["entry".to_string(), "event".to_string()])
         );
+        assert!(!parsed.without_rowid);
     }
 
     #[test]
     fn extract_enums_quoted_column() {
         let sql = "CREATE TABLE t (\"type\" TEXT CHECK (\"type\" IN ('a','b')))";
-        let enums = extract_enums(Some(sql));
+        let parsed = parse_create_table(Some(sql));
         assert_eq!(
-            enums.get("type"),
+            parsed.enums.get("type"),
             Some(&vec!["a".to_string(), "b".to_string()])
         );
     }
@@ -591,22 +611,23 @@ mod tests {
     #[test]
     fn extract_enums_no_check() {
         let sql = "CREATE TABLE t (id INTEGER PRIMARY KEY)";
-        let enums = extract_enums(Some(sql));
-        assert!(enums.is_empty());
+        let parsed = parse_create_table(Some(sql));
+        assert!(parsed.enums.is_empty());
     }
 
     #[test]
     fn extract_enums_none_sql() {
-        let enums = extract_enums(None);
-        assert!(enums.is_empty());
+        let parsed = parse_create_table(None);
+        assert!(parsed.enums.is_empty());
+        assert!(!parsed.without_rowid);
     }
 
     #[test]
     fn extract_enums_escaped_quotes() {
         let sql = "CREATE TABLE t (status TEXT CHECK (status IN ('it''s', 'a''b''c')))";
-        let enums = extract_enums(Some(sql));
+        let parsed = parse_create_table(Some(sql));
         assert_eq!(
-            enums.get("status"),
+            parsed.enums.get("status"),
             Some(&vec!["it's".to_string(), "a'b'c".to_string()])
         );
     }
@@ -629,8 +650,7 @@ mod tests {
                 pk: 0,
             },
         ];
-        let sql = Some("CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)");
-        assert_eq!(detect_rowid_alias(&cols, sql), Some("id".into()));
+        assert_eq!(detect_rowid_alias(&cols, false), Some("id".into()));
     }
 
     #[test]
@@ -642,8 +662,7 @@ mod tests {
             default_value: None,
             pk: 1,
         }];
-        let sql = Some("CREATE TABLE t (id INTEGER PRIMARY KEY) WITHOUT ROWID");
-        assert_eq!(detect_rowid_alias(&cols, sql), None);
+        assert_eq!(detect_rowid_alias(&cols, true), None);
     }
 
     #[test]
@@ -664,8 +683,7 @@ mod tests {
                 pk: 2,
             },
         ];
-        let sql = Some("CREATE TABLE t (a INTEGER, b INTEGER, PRIMARY KEY (a, b))");
-        assert_eq!(detect_rowid_alias(&cols, sql), None);
+        assert_eq!(detect_rowid_alias(&cols, false), None);
     }
 
     #[test]
@@ -677,7 +695,20 @@ mod tests {
             default_value: None,
             pk: 1,
         }];
-        let sql = Some("CREATE TABLE t (id TEXT PRIMARY KEY)");
-        assert_eq!(detect_rowid_alias(&cols, sql), None);
+        assert_eq!(detect_rowid_alias(&cols, false), None);
+    }
+
+    #[test]
+    fn parse_create_table_detects_without_rowid() {
+        let sql = "CREATE TABLE t (id INTEGER PRIMARY KEY) WITHOUT ROWID";
+        let parsed = parse_create_table(Some(sql));
+        assert!(parsed.without_rowid);
+    }
+
+    #[test]
+    fn parse_create_table_without_rowid_is_false_by_default() {
+        let sql = "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)";
+        let parsed = parse_create_table(Some(sql));
+        assert!(!parsed.without_rowid);
     }
 }
