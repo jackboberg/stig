@@ -2,6 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use rusqlite::params;
+use sqlparser::ast::Statement;
+use sqlparser::dialect::SQLiteDialect;
+use sqlparser::parser::Parser;
 use tracing::warn;
 
 use crate::config::Config;
@@ -166,21 +169,26 @@ fn has_explicit_transaction(sql: &str) -> bool {
     false
 }
 
-/// Check whether a migration file contains any meaningful SQL statements.
+/// Parse SQL statements from migration content.
 ///
-/// Uses `sqlparser` to parse the content (after stripping the
-/// `stig: non-transactional` directive). Returns `true` when parsing
-/// succeeds and yields zero statements.
-///
-/// If the parser fails, returns `false` — we let SQLite's `execute_batch`
+/// Strips the `stig: non-transactional` directive before parsing.
+/// Returns `None` if the parser fails — we let SQLite's `execute_batch`
 /// surface the real error rather than rejecting possibly-valid SQL that
 /// `sqlparser` does not understand.
-fn is_empty_migration(content: &str) -> bool {
+fn parse_sql_statements(content: &str) -> Option<Vec<Statement>> {
     let sql = strip_directive(content);
-    match sqlparser::parser::Parser::parse_sql(&sqlparser::dialect::SQLiteDialect {}, &sql) {
-        Ok(stmts) => stmts.is_empty(),
-        Err(_) => false,
-    }
+    Parser::parse_sql(&SQLiteDialect {}, &sql).ok()
+}
+
+/// Check whether the parsed statements contain explicit transaction control
+/// (`BEGIN`/`COMMIT`).
+fn has_explicit_transaction_stmts(stmts: &[Statement]) -> bool {
+    stmts.iter().any(|s| {
+        matches!(
+            s,
+            Statement::StartTransaction { .. } | Statement::Commit { .. }
+        )
+    })
 }
 
 /// Apply all pending migrations from `plan` against `db`.
@@ -213,7 +221,8 @@ pub fn apply_pending(db: &Db, plan: &Plan, config: &Config, dry_run: bool) -> Re
         let content = std::fs::read_to_string(&file.path)
             .with_context(|| format!("failed to read {}", file.path.display()))?;
 
-        if is_empty_migration(&content) {
+        let stmts = parse_sql_statements(&content);
+        if stmts.as_ref().is_some_and(Vec::is_empty) {
             return Err(CliError::Usage(format!(
                 "migration {filename} contains no SQL statements"
             ))
@@ -241,7 +250,11 @@ pub fn apply_pending(db: &Db, plan: &Plan, config: &Config, dry_run: bool) -> Re
 
         if is_non_tx {
             let sql = strip_directive(&content);
-            if has_explicit_transaction(&sql) {
+            let has_tx = stmts.as_ref().map_or_else(
+                || has_explicit_transaction(&sql),
+                |s| has_explicit_transaction_stmts(s),
+            );
+            if has_tx {
                 warn!(
                     migration = %filename,
                     "non-transactional migration contains explicit BEGIN/COMMIT statements"
@@ -551,78 +564,107 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // is_empty_migration tests
+    // parse_sql_statements tests
     // -----------------------------------------------------------------------
 
-    #[test]
-    fn is_empty_migration_empty_string() {
-        assert!(is_empty_migration(""));
+    fn is_empty(content: &str) -> bool {
+        parse_sql_statements(content).is_some_and(|s| s.is_empty())
     }
 
     #[test]
-    fn is_empty_migration_whitespace_only() {
-        assert!(is_empty_migration("   \n\n  \t  \n"));
+    fn parse_empty_string() {
+        assert!(is_empty(""));
     }
 
     #[test]
-    fn is_empty_migration_comments_only() {
-        assert!(is_empty_migration(
-            "-- just a comment\n-- another comment\n"
-        ));
+    fn parse_whitespace_only() {
+        assert!(is_empty("   \n\n  \t  \n"));
     }
 
     #[test]
-    fn is_empty_migration_block_comments_only() {
-        assert!(is_empty_migration("/* block comment */\n/* another */\n"));
+    fn parse_comments_only() {
+        assert!(is_empty("-- just a comment\n-- another comment\n"));
     }
 
     #[test]
-    fn is_empty_migration_directive_only() {
-        assert!(is_empty_migration("stig: non-transactional\n"));
+    fn parse_block_comments_only() {
+        assert!(is_empty("/* block comment */\n/* another */\n"));
     }
 
     #[test]
-    fn is_empty_migration_directive_and_comments() {
-        assert!(is_empty_migration("-- header\nstig: non-transactional\n\n"));
+    fn parse_directive_only() {
+        assert!(is_empty("stig: non-transactional\n"));
     }
 
     #[test]
-    fn is_empty_migration_with_select() {
-        assert!(!is_empty_migration("SELECT 1;"));
+    fn parse_directive_and_comments() {
+        assert!(is_empty("-- header\nstig: non-transactional\n\n"));
     }
 
     #[test]
-    fn is_empty_migration_with_create_table() {
-        assert!(!is_empty_migration(
-            "CREATE TABLE x (id INTEGER PRIMARY KEY);"
-        ));
+    fn parse_with_select() {
+        assert!(!is_empty("SELECT 1;"));
     }
 
     #[test]
-    fn is_empty_migration_with_insert() {
-        assert!(!is_empty_migration("INSERT INTO x VALUES (1);"));
+    fn parse_with_create_table() {
+        assert!(!is_empty("CREATE TABLE x (id INTEGER PRIMARY KEY);"));
     }
 
     #[test]
-    fn is_empty_migration_with_pragma() {
-        assert!(!is_empty_migration("PRAGMA journal_mode = WAL;"));
+    fn parse_with_insert() {
+        assert!(!is_empty("INSERT INTO x VALUES (1);"));
     }
 
     #[test]
-    fn is_empty_migration_with_vacuum() {
-        assert!(!is_empty_migration("VACUUM;"));
+    fn parse_with_pragma() {
+        assert!(!is_empty("PRAGMA journal_mode = WAL;"));
     }
 
     #[test]
-    fn is_empty_migration_non_tx_with_sql() {
-        assert!(!is_empty_migration(
+    fn parse_with_vacuum() {
+        assert!(!is_empty("VACUUM;"));
+    }
+
+    #[test]
+    fn parse_non_tx_with_sql() {
+        assert!(!is_empty(
             "stig: non-transactional\nCREATE TABLE x (id INTEGER);\n"
         ));
     }
 
     #[test]
-    fn is_empty_migration_invalid_sql_allowed() {
+    fn parse_invalid_sql_returns_none() {
         // sqlparser may not understand all SQLite syntax; we defer to SQLite.
-        assert!(!is_empty_migration("this is not valid sql at all"));
+        assert!(parse_sql_statements("this is not valid sql at all").is_none());
+    }
+
+    // -----------------------------------------------------------------------
+    // has_explicit_transaction_stmts tests
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn has_explicit_transaction_stmts_detects_begin() {
+        let stmts = parse_sql_statements("BEGIN; SELECT 1; COMMIT;").unwrap();
+        assert!(has_explicit_transaction_stmts(&stmts));
+    }
+
+    #[test]
+    fn has_explicit_transaction_stmts_detects_commit_only() {
+        let stmts = parse_sql_statements("SELECT 1; COMMIT;").unwrap();
+        assert!(has_explicit_transaction_stmts(&stmts));
+    }
+
+    #[test]
+    fn has_explicit_transaction_stmts_no_transaction() {
+        let stmts = parse_sql_statements("SELECT 1; VACUUM;").unwrap();
+        assert!(!has_explicit_transaction_stmts(&stmts));
+    }
+
+    #[test]
+    fn has_explicit_transaction_stmts_empty() {
+        let stmts = parse_sql_statements("").unwrap();
+        assert!(stmts.is_empty());
+        assert!(!has_explicit_transaction_stmts(&stmts));
     }
 }
