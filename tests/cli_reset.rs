@@ -273,3 +273,41 @@ fn reset_creates_resets_dir_if_missing() {
     assert!(resets_dir.exists());
     assert_eq!(count_reset_files(&dir), 1);
 }
+
+// ---------------------------------------------------------------------------
+// 7. Decline then accept — full round-trip
+// ---------------------------------------------------------------------------
+
+#[test]
+fn reset_declined_then_accepted() {
+    let dir = TempDir::new().unwrap();
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_foo",
+        "CREATE TABLE foo (id INTEGER);",
+    );
+    stig_cmd(&dir).arg("migrate").assert().success();
+
+    // Decline.
+    stig_cmd(&dir)
+        .arg("reset")
+        .write_stdin("n\n")
+        .assert()
+        .failure()
+        .code(2);
+
+    // State preserved.
+    assert_eq!(count_schema_migrations(&dir), 1);
+    assert!(table_exists(&dir, "foo"));
+
+    // Accept.
+    stig_cmd(&dir).arg("reset").arg("--yes").assert().success();
+
+    // Schema rebuilt.
+    assert_eq!(count_schema_migrations(&dir), 1);
+    assert!(table_exists(&dir, "foo"));
+    assert_eq!(count_reset_files(&dir), 1);
+}

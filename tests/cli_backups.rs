@@ -183,3 +183,40 @@ fn count_db_files(dir: &std::path::Path) -> usize {
         .filter(|e| e.file_name().to_string_lossy().ends_with(".db"))
         .count()
 }
+
+// ---------------------------------------------------------------------------
+// 6. List shows correct counts after migrate then reset
+// ---------------------------------------------------------------------------
+
+#[test]
+fn backups_list_counts_after_migrate_and_reset() {
+    let dir = TempDir::new().unwrap();
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_foo",
+        "CREATE TABLE foo (id INTEGER);",
+    );
+
+    // After migrate: 1 snapshot, 0 resets.
+    stig_cmd(&dir).arg("migrate").assert().success();
+    stig_cmd(&dir)
+        .arg("backups")
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("snapshots (1 of max 5):"))
+        .stdout(predicate::str::contains("resets (0 of max 3):"));
+
+    // After reset: 1 snapshot, 1 reset.
+    stig_cmd(&dir).arg("reset").arg("--yes").assert().success();
+    stig_cmd(&dir)
+        .arg("backups")
+        .arg("list")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("snapshots (1 of max 5):"))
+        .stdout(predicate::str::contains("resets (1 of max 3):"));
+}
