@@ -216,7 +216,7 @@ fn execute_non_transactional(
                 ));
             }
             return Err(anyhow::anyhow!(
-                "migration {filename} ({version}) failed; database restored to pre-migration state"
+                "migration {filename} ({version}) failed; database restored to pre-migration state\nCaused by: {e}"
             ));
         }
         return Err(e);

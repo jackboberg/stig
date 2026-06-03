@@ -878,7 +878,7 @@ fn migrate_non_tx_retry_after_fix() {
         "stig: non-transactional\nINSERT INTO things (label) VALUES ('test');\nBAD SQL;\n",
     )
     .unwrap();
-    stig_cmd(&dir).arg("migrate").assert().failure();
+    stig_cmd(&dir).arg("migrate").assert().failure().code(1);
 
     // Fix the migration by overwriting the same file
     std::fs::write(
