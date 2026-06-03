@@ -260,9 +260,27 @@ pub fn apply_pending(db: &Db, plan: &Plan, config: &Config, dry_run: bool) -> Re
                     "non-transactional migration contains explicit BEGIN/COMMIT statements"
                 );
             }
-            db.connection()
+            let exec_result = db
+                .connection()
                 .execute_batch(&sql)
-                .with_context(|| format!("failed to execute {filename} ({version})"))?;
+                .with_context(|| format!("failed to execute {filename} ({version})"));
+
+            if let Err(e) = exec_result {
+                if can_snapshot && snapshot::snapshot_exists(version, &snapshots_dir) {
+                    if let Err(restore_err) =
+                        snapshot::restore_snapshot(version, &db_path, &snapshots_dir)
+                    {
+                        return Err(anyhow::anyhow!(
+                            "migration {filename} ({version}) failed; \
+                             attempted to restore pre-migration snapshot but also failed: {restore_err}"
+                        ));
+                    }
+                    return Err(anyhow::anyhow!(
+                        "migration {filename} ({version}) failed; database restored to pre-migration state"
+                    ));
+                }
+                return Err(e);
+            }
         } else {
             let sql = format!("BEGIN TRANSACTION;\n{content}\nCOMMIT;");
             db.connection()
