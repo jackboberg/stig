@@ -164,9 +164,13 @@ fn parse_create_table(sql: Option<&str>) -> ParsedCreateTable {
     let stmts = match Parser::parse_sql(&SQLiteDialect {}, sql) {
         Ok(stmts) => stmts,
         Err(_) => {
+            // Fallback: if sqlparser can't parse the DDL, preserve the old
+            // string-based WITHOUT ROWID detection to avoid regressions on
+            // SQLite syntax the parser doesn't understand.
+            let without_rowid = sql.to_ascii_uppercase().contains("WITHOUT ROWID");
             return ParsedCreateTable {
                 enums: BTreeMap::new(),
-                without_rowid: false,
+                without_rowid,
             };
         }
     };
@@ -179,7 +183,7 @@ fn parse_create_table(sql: Option<&str>) -> ParsedCreateTable {
             continue;
         };
 
-        without_rowid = create.without_rowid;
+        without_rowid |= create.without_rowid;
 
         // Check table-level constraints.
         for constraint in &create.constraints {
@@ -710,5 +714,27 @@ mod tests {
         let sql = "CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)";
         let parsed = parse_create_table(Some(sql));
         assert!(!parsed.without_rowid);
+    }
+
+    #[test]
+    fn parse_create_table_fallback_detects_without_rowid() {
+        // Unparseable SQL that contains WITHOUT ROWID should still detect it
+        // via the fallback string scan.
+        let sql = "CREATE TABLE t (weird_syntax!!!) WITHOUT ROWID";
+        let parsed = parse_create_table(Some(sql));
+        assert!(parsed.without_rowid);
+        assert!(parsed.enums.is_empty());
+    }
+
+    #[test]
+    fn parse_create_table_accumulates_without_rowid() {
+        // Multiple statements: first has WITHOUT ROWID, second doesn't.
+        // The flag should remain true (|= accumulation).
+        let sql = indoc::indoc! {r#"
+            CREATE TABLE t1 (id INTEGER) WITHOUT ROWID;
+            CREATE TABLE t2 (id INTEGER);
+        "#};
+        let parsed = parse_create_table(Some(sql));
+        assert!(parsed.without_rowid);
     }
 }
