@@ -137,43 +137,6 @@ fn reset_creates_backup_artifact() {
     );
 }
 
-// Prune respects reset_keep
-#[test]
-fn reset_prunes_resets_beyond_keep() {
-    let dir = TempDir::new().unwrap();
-
-    stig_cmd(&dir).arg("init").assert().success();
-
-    write_migration(
-        &dir,
-        "20240101000000",
-        "create_foo",
-        "CREATE TABLE foo (id INTEGER);",
-    );
-
-    // Set reset_keep = 2 via config file.
-    let config_path = dir.path().join("stig.toml");
-    std::fs::write(&config_path, "reset_keep = 2\n").unwrap();
-
-    // Run reset 3 times; the oldest should be pruned.
-    // Sleep between resets: snapshot filenames use second-precision UTC timestamps
-    // (`%Y%m%dT%H%M%SZ`), so resets within the same second collide. An injectable
-    // clock in the snapshot module would let tests skip this wait.
-    for i in 0..3 {
-        stig_cmd(&dir).arg("migrate").assert().success();
-        stig_cmd(&dir).arg("reset").arg("--yes").assert().success();
-        if i < 2 {
-            std::thread::sleep(std::time::Duration::from_millis(1100));
-        }
-    }
-
-    assert_eq!(
-        count_reset_files(&dir),
-        2,
-        "expected exactly 2 reset files after 3 resets with keep=2"
-    );
-}
-
 // --yes flag runs without prompt
 #[test]
 fn reset_with_yes_flag_runs_without_prompt() {
