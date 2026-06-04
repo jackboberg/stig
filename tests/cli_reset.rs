@@ -7,6 +7,7 @@ use rusqlite::Connection;
 use tempfile::TempDir;
 
 use common::{stig_cmd, write_migration};
+use filetime::FileTime;
 
 /// Query the number of rows in `schema_migrations` from the project DB.
 fn count_schema_migrations(dir: &TempDir) -> i64 {
@@ -161,13 +162,10 @@ fn reset_prunes_resets_beyond_keep() {
     let resets_dir = dir.path().join(".local/db-backups/resets");
     std::fs::create_dir_all(&resets_dir).unwrap();
     for i in 1u8..=3 {
-        std::fs::write(
-            resets_dir.join(format!("reset-2024010100000{i:02}Z.db")),
-            [i],
-        )
-        .unwrap();
-        // Brief sleep to ensure distinct mtimes on coarse filesystems.
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        let path = resets_dir.join(format!("reset-2024010100000{i:02}Z.db"));
+        std::fs::write(&path, [i]).unwrap();
+        filetime::set_file_mtime(&path, FileTime::from_unix_time(1_700_000_000 + i as i64, 0))
+            .unwrap();
     }
 
     // Run reset once; should create a 4th file and prune the 2 oldest.
