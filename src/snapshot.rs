@@ -85,12 +85,12 @@ pub fn restore_snapshot(version: &str, db_path: &Path, snapshots_dir: &Path) -> 
         );
     }
 
-    let mut pairs: Vec<(PathBuf, PathBuf)> = vec![(snap_base.clone(), db_path.to_path_buf())];
+    let mut pairs: Vec<(Option<PathBuf>, PathBuf)> =
+        vec![(Some(snap_base.clone()), db_path.to_path_buf())];
     for ext in ["-wal", "-shm"] {
         let src = sidecar(&snap_base, ext);
-        if src.exists() {
-            pairs.push((src, sidecar(db_path, ext)));
-        }
+        let src_opt = if src.exists() { Some(src) } else { None };
+        pairs.push((src_opt, sidecar(db_path, ext)));
     }
 
     atomic_replace_with_rollback(&pairs)
@@ -241,12 +241,12 @@ pub fn prune_resets(resets_dir: &Path, keep: u32) -> Result<()> {
 pub fn restore_reset_backup(db_path: &Path, resets_dir: &Path) -> Result<()> {
     let backup = most_recent_reset(resets_dir)?;
 
-    let mut pairs: Vec<(PathBuf, PathBuf)> = vec![(backup.clone(), db_path.to_path_buf())];
+    let mut pairs: Vec<(Option<PathBuf>, PathBuf)> =
+        vec![(Some(backup.clone()), db_path.to_path_buf())];
     for ext in ["-wal", "-shm"] {
         let src = sidecar(&backup, ext);
-        if src.exists() {
-            pairs.push((src, sidecar(db_path, ext)));
-        }
+        let src_opt = if src.exists() { Some(src) } else { None };
+        pairs.push((src_opt, sidecar(db_path, ext)));
     }
 
     atomic_replace_with_rollback(&pairs)
@@ -289,7 +289,7 @@ fn most_recent_reset(resets_dir: &Path) -> Result<PathBuf> {
 // ---------------------------------------------------------------------------
 
 /// Return the path of a sidecar file (e.g. `app.db-wal`) for a given base.
-fn sidecar(base: &Path, ext: &str) -> PathBuf {
+pub(crate) fn sidecar(base: &Path, ext: &str) -> PathBuf {
     let mut s = base.as_os_str().to_os_string();
     s.push(ext);
     PathBuf::from(s)
@@ -353,11 +353,12 @@ fn restore_saved(saved: &[(PathBuf, PathBuf)]) {
 ///
 /// Each `(src, dst)` pair is processed in two phases:
 /// 1. Move existing destination files to temp locations.
-/// 2. Copy source files into destination positions.
+/// 2. If `src` is `Some`, copy it into the destination position.
+///    If `src` is `None`, ensure the destination is absent (no copy).
 ///
 /// If either phase fails, partially-written destination files are removed
 /// and originals are restored. On success, temp copies are deleted.
-fn atomic_replace_with_rollback(pairs: &[(PathBuf, PathBuf)]) -> Result<()> {
+fn atomic_replace_with_rollback(pairs: &[(Option<PathBuf>, PathBuf)]) -> Result<()> {
     // Phase 1: Move existing destination files aside.
     let mut saved: Vec<(PathBuf, PathBuf)> = Vec::new();
     let save_result = (|| -> Result<()> {
@@ -374,10 +375,13 @@ fn atomic_replace_with_rollback(pairs: &[(PathBuf, PathBuf)]) -> Result<()> {
         return Err(e.context("failed to move existing files aside"));
     }
 
-    // Phase 2: Copy source files into destination positions.
+    // Phase 2: Copy source files into destination positions, or ensure
+    // absence when `src` is `None`.
     let copy_result = (|| -> Result<()> {
         for (src, dst) in pairs {
-            copy_file(src, dst)?;
+            if let Some(src) = src {
+                copy_file(src, dst)?;
+            }
         }
         Ok(())
     })();

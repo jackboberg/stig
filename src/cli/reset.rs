@@ -52,11 +52,7 @@ pub fn run(yes: bool) -> anyhow::Result<()> {
         // Clean up any partially-created database at the original path.
         let _ = std::fs::remove_file(&db_path);
         for ext in ["-wal", "-shm"] {
-            let sidecar_path = db_path.with_extension(format!(
-                "{}.{ext}",
-                db_path.extension().and_then(|e| e.to_str()).unwrap_or("db")
-            ));
-            let _ = std::fs::remove_file(&sidecar_path);
+            let _ = std::fs::remove_file(snapshot::sidecar(&db_path, ext));
         }
         snapshot::restore_reset_backup(&db_path, &resets_dir)
             .context("failed to restore reset backup after reapply failure")?;
