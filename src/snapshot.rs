@@ -393,6 +393,7 @@ fn prune_dir(dir: &Path, prefix: &str, keep: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use filetime::FileTime;
     use tempfile::TempDir;
 
     /// Write a file with known content and return its path.
@@ -614,11 +615,10 @@ mod tests {
         let snaps = dir.path().join("snapshots");
         std::fs::create_dir(&snaps).unwrap();
 
-        // Create 5 snapshot .db files; use sleep to ensure distinct mtimes.
         for i in 1u8..=5 {
-            write_file(&snaps, &format!("pre-2024010100000{i}_v.db"), &[i]);
-            // Small sleep so mtimes differ on coarse filesystems.
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            let path = write_file(&snaps, &format!("pre-2024010100000{i}_v.db"), &[i]);
+            filetime::set_file_mtime(&path, FileTime::from_unix_time(1_700_000_000 + i as i64, 0))
+                .unwrap();
         }
 
         prune_snapshots(&snaps, 3).unwrap();
@@ -639,10 +639,10 @@ mod tests {
         std::fs::create_dir(&snaps).unwrap();
 
         // Create 2 snapshots, the older one has sidecars.
-        write_file(&snaps, "pre-20240101000001_a.db", b"a");
+        let old = write_file(&snaps, "pre-20240101000001_a.db", b"a");
         write_file(&snaps, "pre-20240101000001_a.db-wal", b"wal");
         write_file(&snaps, "pre-20240101000001_a.db-shm", b"shm");
-        std::thread::sleep(std::time::Duration::from_millis(10));
+        filetime::set_file_mtime(&old, FileTime::from_unix_time(1_700_000_000, 0)).unwrap();
         write_file(&snaps, "pre-20240101000002_b.db", b"b");
 
         prune_snapshots(&snaps, 1).unwrap();
@@ -816,8 +816,9 @@ mod tests {
         std::fs::create_dir(&resets).unwrap();
 
         for i in 1u8..=4 {
-            write_file(&resets, &format!("reset-202401010000{i:02}Z.db"), &[i]);
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            let path = write_file(&resets, &format!("reset-202401010000{i:02}Z.db"), &[i]);
+            filetime::set_file_mtime(&path, FileTime::from_unix_time(1_700_000_000 + i as i64, 0))
+                .unwrap();
         }
 
         prune_resets(&resets, 2).unwrap();
