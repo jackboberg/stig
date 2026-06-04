@@ -295,3 +295,54 @@ fn reset_declined_then_accepted() {
     assert!(table_exists(&dir, "foo"));
     assert_eq!(count_reset_files(&dir), 1);
 }
+
+// If reapply fails partway through, the original database is restored from
+// the reset backup.
+#[test]
+fn reset_restores_backup_on_reapply_failure() {
+    let dir = TempDir::new().unwrap();
+
+    stig_cmd(&dir).arg("init").assert().success();
+
+    // First migration: creates a table.
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_users",
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);",
+    );
+
+    stig_cmd(&dir).arg("migrate").assert().success();
+
+    // Insert data that should survive a failed reset.
+    let db_path = dir.path().join("app.db");
+    {
+        let conn = Connection::open(&db_path).unwrap();
+        conn.execute("INSERT INTO users (id, name) VALUES (1, 'survivor')", [])
+            .unwrap();
+    }
+
+    // Add a second migration that will fail at runtime during reset reapply.
+    write_migration(
+        &dir,
+        "20240102000000",
+        "bad_insert",
+        "INSERT INTO nonexistent_table VALUES (1);",
+    );
+
+    // Reset should fail because the second migration errors.
+    stig_cmd(&dir).arg("reset").arg("--yes").assert().failure();
+
+    // Original database must be restored: table exists with data.
+    assert!(table_exists(&dir, "users"));
+    assert_eq!(count_schema_migrations(&dir), 1);
+
+    let conn = Connection::open(&db_path).unwrap();
+    let name: String = conn
+        .query_row("SELECT name FROM users WHERE id = 1", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(name, "survivor", "expected original data to be restored");
+
+    // Reset backup artifact still exists.
+    assert_eq!(count_reset_files(&dir), 1);
+}

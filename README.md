@@ -147,6 +147,10 @@ re-migrates from empty. Prompts for confirmation unless `--yes` is passed.
 Use this when a migration has been edited but its snapshot has already been
 pruned, or when you want a clean slate.
 
+**Safety:** If re-applying migrations fails partway through, the original
+database is automatically restored from the reset backup. This ensures reset
+is atomic — either it fully succeeds or the database is left unchanged.
+
 ```sh
 # Chain with your project's seed command
 stig reset --yes && my-project seed
