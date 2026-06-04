@@ -7,6 +7,7 @@ use rusqlite::Connection;
 use tempfile::TempDir;
 
 use common::{stig_cmd, write_migration};
+use filetime::FileTime;
 
 /// Query the number of rows in `schema_migrations` from the project DB.
 fn count_schema_migrations(dir: &TempDir) -> i64 {
@@ -137,7 +138,7 @@ fn reset_creates_backup_artifact() {
     );
 }
 
-// Prune respects reset_keep
+// Prune respects reset_keep — pre-create old reset files to avoid sleeps
 #[test]
 fn reset_prunes_resets_beyond_keep() {
     let dir = TempDir::new().unwrap();
@@ -155,22 +156,26 @@ fn reset_prunes_resets_beyond_keep() {
     let config_path = dir.path().join("stig.toml");
     std::fs::write(&config_path, "reset_keep = 2\n").unwrap();
 
-    // Run reset 3 times; the oldest should be pruned.
-    // Sleep between resets: snapshot filenames use second-precision UTC timestamps
-    // (`%Y%m%dT%H%M%SZ`), so resets within the same second collide. An injectable
-    // clock in the snapshot module would let tests skip this wait.
-    for i in 0..3 {
-        stig_cmd(&dir).arg("migrate").assert().success();
-        stig_cmd(&dir).arg("reset").arg("--yes").assert().success();
-        if i < 2 {
-            std::thread::sleep(std::time::Duration::from_millis(1100));
-        }
+    // Pre-create 3 old reset backup files with distinct mtimes.
+    // These simulate prior reset runs without needing to invoke the CLI
+    // multiple times or sleep between them.
+    let resets_dir = dir.path().join(".local/db-backups/resets");
+    std::fs::create_dir_all(&resets_dir).unwrap();
+    for i in 1u8..=3 {
+        let path = resets_dir.join(format!("reset-synth-{i:03}.db"));
+        std::fs::write(&path, [i]).unwrap();
+        filetime::set_file_mtime(&path, FileTime::from_unix_time(1_700_000_000 + i as i64, 0))
+            .unwrap();
     }
+
+    // Run reset once; should create a 4th file and prune the 2 oldest.
+    stig_cmd(&dir).arg("migrate").assert().success();
+    stig_cmd(&dir).arg("reset").arg("--yes").assert().success();
 
     assert_eq!(
         count_reset_files(&dir),
         2,
-        "expected exactly 2 reset files after 3 resets with keep=2"
+        "expected exactly 2 reset files after reset with keep=2"
     );
 }
 
