@@ -137,6 +137,50 @@ fn reset_creates_backup_artifact() {
     );
 }
 
+// Prune respects reset_keep — pre-create old reset files to avoid sleeps
+#[test]
+fn reset_prunes_resets_beyond_keep() {
+    let dir = TempDir::new().unwrap();
+
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_foo",
+        "CREATE TABLE foo (id INTEGER);",
+    );
+
+    // Set reset_keep = 2 via config file.
+    let config_path = dir.path().join("stig.toml");
+    std::fs::write(&config_path, "reset_keep = 2\n").unwrap();
+
+    // Pre-create 3 old reset backup files with distinct mtimes.
+    // These simulate prior reset runs without needing to invoke the CLI
+    // multiple times or sleep between them.
+    let resets_dir = dir.path().join(".local/db-backups/resets");
+    std::fs::create_dir_all(&resets_dir).unwrap();
+    for i in 1u8..=3 {
+        std::fs::write(
+            resets_dir.join(format!("reset-2024010100000{i:02}Z.db")),
+            [i],
+        )
+        .unwrap();
+        // Brief sleep to ensure distinct mtimes on coarse filesystems.
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+
+    // Run reset once; should create a 4th file and prune the 2 oldest.
+    stig_cmd(&dir).arg("migrate").assert().success();
+    stig_cmd(&dir).arg("reset").arg("--yes").assert().success();
+
+    assert_eq!(
+        count_reset_files(&dir),
+        2,
+        "expected exactly 2 reset files after reset with keep=2"
+    );
+}
+
 // --yes flag runs without prompt
 #[test]
 fn reset_with_yes_flag_runs_without_prompt() {
