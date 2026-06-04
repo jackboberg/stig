@@ -204,6 +204,9 @@ pub fn prune_snapshots(snapshots_dir: &Path, keep: u32) -> Result<()> {
 ///
 /// On partial failure all destination files are removed and the source files
 /// are restored before the error is returned.
+///
+/// **Caller responsibility:** run a WAL checkpoint before calling this
+/// function to ensure the reset backup is internally consistent.
 pub fn take_reset_backup(db_path: &Path, resets_dir: &Path) -> Result<PathBuf> {
     take_reset_backup_with_clock(db_path, resets_dir, Utc::now)
 }
@@ -221,7 +224,7 @@ pub fn take_reset_backup(db_path: &Path, resets_dir: &Path) -> Result<PathBuf> {
 ///
 /// **Caller responsibility:** run a WAL checkpoint before calling this
 /// function to ensure the reset backup is internally consistent.
-pub fn take_reset_backup_with_clock(
+pub(crate) fn take_reset_backup_with_clock(
     db_path: &Path,
     resets_dir: &Path,
     now: impl FnOnce() -> DateTime<Utc>,

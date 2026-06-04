@@ -162,7 +162,7 @@ fn reset_prunes_resets_beyond_keep() {
     let resets_dir = dir.path().join(".local/db-backups/resets");
     std::fs::create_dir_all(&resets_dir).unwrap();
     for i in 1u8..=3 {
-        let path = resets_dir.join(format!("reset-2024010100000{i:02}Z.db"));
+        let path = resets_dir.join(format!("reset-synth-{i:03}.db"));
         std::fs::write(&path, [i]).unwrap();
         filetime::set_file_mtime(&path, FileTime::from_unix_time(1_700_000_000 + i as i64, 0))
             .unwrap();
