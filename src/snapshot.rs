@@ -211,20 +211,14 @@ pub fn take_reset_backup(db_path: &Path, resets_dir: &Path) -> Result<PathBuf> {
     take_reset_backup_with_clock(db_path, resets_dir, Utc::now)
 }
 
-/// Move `db_path` (plus `-wal`/`-shm` sidecars) to
-/// `resets_dir/reset-<UTC-timestamp>.db{,-wal,-shm}`, using `now` to
-/// obtain the current time.
-///
-/// This is the injectable-clock variant of [`take_reset_backup`].  It is
-/// intended for tests that need deterministic timestamps, avoiding the
-/// second-precision collisions that previously required `sleep` calls.
+/// Injectable-clock variant of [`take_reset_backup`].
 ///
 /// The `now` closure is called exactly once.  Sidecar handling, rollback
 /// behaviour, and return value are identical to [`take_reset_backup`].
 ///
 /// **Caller responsibility:** run a WAL checkpoint before calling this
 /// function to ensure the reset backup is internally consistent.
-pub(crate) fn take_reset_backup_with_clock(
+fn take_reset_backup_with_clock(
     db_path: &Path,
     resets_dir: &Path,
     now: impl FnOnce() -> DateTime<Utc>,
