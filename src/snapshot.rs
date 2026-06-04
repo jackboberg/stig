@@ -214,7 +214,7 @@ pub fn take_reset_backup(db_path: &Path, resets_dir: &Path) -> Result<PathBuf> {
 ///
 /// This is the injectable-clock variant of [`take_reset_backup`].  It is
 /// intended for tests that need deterministic timestamps, avoiding the
-/// second-precision collisions that require `sleep` calls in real-time code.
+/// second-precision collisions that previously required `sleep` calls.
 ///
 /// The `now` closure is called exactly once.  Sidecar handling, rollback
 /// behaviour, and return value are identical to [`take_reset_backup`].
@@ -224,7 +224,7 @@ pub fn take_reset_backup(db_path: &Path, resets_dir: &Path) -> Result<PathBuf> {
 pub fn take_reset_backup_with_clock(
     db_path: &Path,
     resets_dir: &Path,
-    mut now: impl FnMut() -> DateTime<Utc>,
+    now: impl FnOnce() -> DateTime<Utc>,
 ) -> Result<PathBuf> {
     let ts = now().format("%Y%m%dT%H%M%SZ");
     let dest_base = resets_dir.join(format!("reset-{ts}.db"));
