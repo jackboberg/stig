@@ -4,6 +4,7 @@ pub mod config;
 pub mod db;
 pub mod errors;
 pub mod migrate;
+pub mod schema;
 pub mod snapshot;
 
 /// Compute the lower-case hex-encoded SHA-256 digest of `bytes`.

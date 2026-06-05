@@ -13,6 +13,7 @@ pub const STIG_ENV_KEYS: &[&str] = &[
     "STIG_BACKUPS_DIR",
     "STIG_NO_SNAPSHOT",
     "STIG_NO_CHECKSUM",
+    "STIG_SCHEMA_PATH",
 ];
 
 /// Return a `stig` [`Command`] with CWD set to `dir` and all known `STIG_*`

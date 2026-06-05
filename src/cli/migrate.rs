@@ -7,6 +7,7 @@ use crate::errors::CliError;
 use crate::migrate::apply;
 use crate::migrate::discover::discover;
 use crate::migrate::plan::Plan;
+use crate::schema;
 
 /// Run `stig migrate`.
 pub fn run(dry_run: bool) -> anyhow::Result<()> {
@@ -40,14 +41,35 @@ pub fn run(dry_run: bool) -> anyhow::Result<()> {
         }
     }
 
-    apply::apply_pending(&db, &plan, &config, dry_run)?;
-
+    let n_current = plan.entries.len();
     let n_pending = plan.pending().len();
-    let n_current = plan.entries.len() - n_pending;
-    if dry_run {
-        println!("✓ {n_pending} would be applied, {n_current} already up to date");
+    let n_already = n_current - n_pending;
+
+    if !dry_run && n_pending == n_current && schema::schema_has_content(&config) {
+        let n_applied = schema::apply_schema_manifest(&db, &config, &files)
+            .context("failed to apply schema manifest")?;
+        println!(
+            "✓ applied {} ({n_applied} migrations marked as applied)",
+            config.schema_path
+        );
     } else {
-        println!("✓ {n_pending} applied, {n_current} already up to date");
+        apply::apply_pending(&db, &plan, &config, dry_run)?;
+
+        if dry_run {
+            println!("✓ {n_pending} would be applied, {n_already} already up to date");
+        } else {
+            println!("✓ {n_pending} applied, {n_already} already up to date");
+
+            if n_pending > 0 {
+                let plan_after = Plan::build(&files, db.connection())?;
+                if plan_after.pending().is_empty() {
+                    let sql = schema::generate_schema_sql(db.connection())
+                        .context("failed to generate schema manifest")?;
+                    schema::write_schema_sql(&config, &sql)
+                        .context("failed to write schema manifest")?;
+                }
+            }
+        }
     }
 
     Ok(())

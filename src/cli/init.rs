@@ -5,6 +5,7 @@
 //! - Creates the migrations directory.
 //! - Creates the backups directory tree (`snapshots/`, `resets/`) with a
 //!   `.gitignore` that excludes everything.
+//! - Creates an initial empty `schema.sql` manifest.
 //! - Opens (or creates) the database and ensures `schema_migrations` exists.
 
 use std::path::{Path, PathBuf};
@@ -15,6 +16,7 @@ use crate::config::Config;
 use crate::config::env_source::ProcessEnv;
 use crate::db::Db;
 use crate::errors::CliError;
+use crate::schema;
 
 /// Run `stig init`.
 ///
@@ -33,6 +35,7 @@ pub fn run() -> anyhow::Result<()> {
     write_config(&config, &project_root)?;
     create_migrations_dir(&config, &project_root)?;
     create_backups_dir(&config, &project_root)?;
+    create_schema_manifest(&config)?;
     bootstrap_database(&config)?;
 
     Ok(())
@@ -88,6 +91,14 @@ fn create_backups_dir(config: &Config, project_root: &Path) -> anyhow::Result<()
         "✓ created {}/{{snapshots,resets}}/ (gitignored)",
         config.backups_dir
     );
+    Ok(())
+}
+
+/// Create an initial empty schema manifest file.
+fn create_schema_manifest(config: &Config) -> anyhow::Result<()> {
+    schema::write_schema_sql(config, "")
+        .with_context(|| "failed to create schema manifest".to_string())?;
+    println!("✓ created {}", config.schema_path);
     Ok(())
 }
 

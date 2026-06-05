@@ -159,6 +159,7 @@ pub struct CliOverrides {
     pub backups_dir: Option<String>,
     pub auto_snapshot: Option<bool>,
     pub checksum_check: Option<bool>,
+    pub schema_path: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +215,10 @@ pub struct Config {
     /// Codegen targets.
     #[serde(default, rename = "generate")]
     pub generate: Vec<GenerateTarget>,
+
+    /// Path to the schema manifest file.
+    #[serde(default = "default_schema_path")]
+    pub schema_path: String,
 }
 
 // Default value fns used by serde and the Default impl.
@@ -238,6 +243,9 @@ fn default_auto_snapshot() -> bool {
 fn default_checksum_check() -> bool {
     true
 }
+fn default_schema_path() -> String {
+    "db/schema.sql".to_string()
+}
 
 impl Default for Config {
     fn default() -> Self {
@@ -252,6 +260,7 @@ impl Default for Config {
             checksum_check: default_checksum_check(),
             pragmas: Pragmas::default(),
             generate: Vec::new(),
+            schema_path: default_schema_path(),
         }
     }
 }
@@ -364,6 +373,9 @@ impl Config {
         if let Some(v) = overrides.checksum_check {
             self.checksum_check = v;
         }
+        if let Some(v) = &overrides.schema_path {
+            self.schema_path = v.clone();
+        }
     }
 
     /// Resolve a relative config path against `project_root`.
@@ -463,6 +475,11 @@ impl Config {
             && !v.is_empty()
         {
             self.checksum_check = false;
+        }
+
+        // STIG_SCHEMA_PATH
+        if let Some(v) = env.get_var("STIG_SCHEMA_PATH") {
+            self.schema_path = v;
         }
     }
 
@@ -711,6 +728,16 @@ mod tests {
         assert!(!cfg.checksum_check);
     }
 
+    #[test]
+    fn env_stig_schema_path_overrides_file() {
+        let f = temp_toml("");
+
+        let env = MapEnv([("STIG_SCHEMA_PATH".into(), "custom/schema.sql".into())].into());
+
+        let cfg = Config::load(Some(f.path()), &env, None).unwrap();
+        assert_eq!(cfg.schema_path, "custom/schema.sql");
+    }
+
     // -----------------------------------------------------------------------
     // 5. CLI overrides
     // -----------------------------------------------------------------------
@@ -763,6 +790,21 @@ mod tests {
         };
         cfg.apply_cli_overrides(&overrides);
         assert!(!cfg.auto_snapshot);
+    }
+
+    #[test]
+    fn cli_override_schema_path() {
+        let f = temp_toml("");
+
+        let mut cfg = Config::load(Some(f.path()), &empty_env(), None).unwrap();
+        assert_eq!(cfg.schema_path, "db/schema.sql");
+
+        let overrides = CliOverrides {
+            schema_path: Some("custom/schema.sql".into()),
+            ..Default::default()
+        };
+        cfg.apply_cli_overrides(&overrides);
+        assert_eq!(cfg.schema_path, "custom/schema.sql");
     }
 
     // -----------------------------------------------------------------------
@@ -911,6 +953,7 @@ mod tests {
         assert_eq!(loaded.checksum_check, original.checksum_check);
         assert_eq!(loaded.pragmas, original.pragmas);
         assert_eq!(loaded.generate, original.generate);
+        assert_eq!(loaded.schema_path, original.schema_path);
     }
 
     #[test]
