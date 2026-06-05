@@ -76,8 +76,9 @@ pub fn write_schema_sql(config: &Config, sql: &str) -> Result<()> {
 /// Generate the schema SQL by querying `sqlite_master` for all DDL statements.
 ///
 /// Excludes internal SQLite objects (`sqlite_%`) and the `schema_migrations`
-/// tracking table. Returns statements ordered by `type`, then `name` for
-/// deterministic output. Each statement is terminated with a semicolon.
+/// tracking table. Returns statements in dependency-safe order: tables first,
+/// then views, then indexes, then triggers. Each statement is terminated with
+/// a semicolon.
 pub fn generate_schema_sql(conn: &Connection) -> Result<String> {
     let mut stmt = conn
         .prepare(
@@ -86,15 +87,25 @@ pub fn generate_schema_sql(conn: &Connection) -> Result<String> {
                AND type IN ('table', 'index', 'trigger', 'view') \
                AND name NOT LIKE 'sqlite_%' \
                AND name != 'schema_migrations' \
-             ORDER BY type, name",
+             ORDER BY \
+               CASE type \
+                 WHEN 'table'   THEN 1 \
+                 WHEN 'view'    THEN 2 \
+                 WHEN 'index'   THEN 3 \
+                 WHEN 'trigger' THEN 4 \
+                 ELSE 5 \
+               END, \
+               name",
         )
         .context("failed to prepare schema query")?;
 
-    let mut statements: Vec<String> = stmt
+    let rows = stmt
         .query_map([], |row| row.get(0))
-        .context("failed to query sqlite_master")?
-        .filter_map(|r| r.ok())
-        .collect();
+        .context("failed to query sqlite_master")?;
+
+    let mut statements: Vec<String> = rows
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .context("failed to read schema rows")?;
 
     statements.retain(|s| !s.trim().is_empty());
     statements.dedup();
@@ -119,14 +130,34 @@ pub fn generate_schema_sql(conn: &Connection) -> Result<String> {
 /// Executes the schema SQL, then populates `schema_migrations` with all known
 /// migration versions and their checksums. Returns the number of migrations
 /// marked as applied.
+///
+/// # Errors
+///
+/// Returns an error if the manifest file is missing or contains no DDL
+/// content (header-only).
 pub fn apply_schema_manifest(db: &Db, config: &Config, files: &[MigrationFile]) -> Result<usize> {
-    let sql = load_schema_sql(config)?.unwrap_or_default();
+    let sql = load_schema_sql(config)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "schema manifest not found: {}",
+            schema_path(config).display()
+        )
+    })?;
 
-    if !sql.is_empty() {
-        db.connection()
-            .execute_batch(&sql)
-            .context("failed to execute schema manifest")?;
+    let stripped = sql
+        .lines()
+        .filter(|line| !line.trim().is_empty() && !line.trim().starts_with("--"))
+        .collect::<String>();
+
+    if stripped.is_empty() {
+        return Err(anyhow::anyhow!(
+            "schema manifest has no DDL content: {}",
+            schema_path(config).display()
+        ));
     }
+
+    db.connection()
+        .execute_batch(&sql)
+        .context("failed to execute schema manifest")?;
 
     let mut count = 0;
     for file in files {
@@ -151,6 +182,7 @@ pub fn apply_schema_manifest(db: &Db, config: &Config, files: &[MigrationFile]) 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::db::Db;
     use rusqlite::Connection;
     use tempfile::TempDir;
 
@@ -205,6 +237,57 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         let sql = generate_schema_sql(&conn).unwrap();
         assert!(sql.is_empty());
+    }
+
+    #[test]
+    fn generate_schema_sql_tables_before_indexes() {
+        let conn = setup_db();
+        let sql = generate_schema_sql(&conn).unwrap();
+
+        let table_pos = sql.find("CREATE TABLE users").unwrap();
+        let index_pos = sql.find("CREATE INDEX idx_posts_user_id").unwrap();
+        assert!(
+            table_pos < index_pos,
+            "tables must appear before indexes in generated schema"
+        );
+    }
+
+    #[test]
+    fn apply_schema_manifest_fails_when_missing() {
+        let dir = TempDir::new().unwrap();
+        let config = Config {
+            project_root: dir.path().to_path_buf(),
+            schema_path: "db/schema.sql".to_string(),
+            database_path: ":memory:".to_string(),
+            ..Config::default()
+        };
+
+        let db = Db::open(&config).unwrap();
+
+        let result = apply_schema_manifest(&db, &config, &[]);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not found"));
+    }
+
+    #[test]
+    fn apply_schema_manifest_fails_when_header_only() {
+        let dir = TempDir::new().unwrap();
+        let config = Config {
+            project_root: dir.path().to_path_buf(),
+            schema_path: "db/schema.sql".to_string(),
+            database_path: ":memory:".to_string(),
+            ..Config::default()
+        };
+
+        write_schema_sql(&config, "").unwrap();
+
+        let db = Db::open(&config).unwrap();
+
+        let result = apply_schema_manifest(&db, &config, &[]);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("no DDL content"));
     }
 
     #[test]
