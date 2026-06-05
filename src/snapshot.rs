@@ -253,22 +253,22 @@ pub fn restore_reset_backup(db_path: &Path, resets_dir: &Path) -> Result<()> {
         .context("failed to restore reset backup; original state restored")
 }
 
-/// Return the path of the most recently modified `reset-*.db` file in
-/// `resets_dir`.
+/// Return the path of the most recent `reset-*.db` file in `resets_dir`
+/// by filename ordering (timestamps embedded in filenames are ISO-8601
+/// compatible, so lexicographic sort is chronological).
 fn most_recent_reset(resets_dir: &Path) -> Result<PathBuf> {
     if !resets_dir.is_dir() {
         anyhow::bail!("resets directory does not exist: {}", resets_dir.display());
     }
 
-    let mut entries: Vec<(PathBuf, std::time::SystemTime)> = std::fs::read_dir(resets_dir)
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(resets_dir)
         .with_context(|| format!("failed to read directory {}", resets_dir.display()))?
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let name = entry.file_name();
             let name = name.to_string_lossy();
             if name.starts_with("reset-") && name.ends_with(".db") {
-                let mtime = entry.metadata().ok()?.modified().ok()?;
-                Some((entry.path(), mtime))
+                Some(entry.path())
             } else {
                 None
             }
@@ -279,9 +279,13 @@ fn most_recent_reset(resets_dir: &Path) -> Result<PathBuf> {
         anyhow::bail!("no reset backups found in {}", resets_dir.display());
     }
 
-    // Sort by mtime descending, take the newest.
-    entries.sort_by_key(|(_, mtime)| std::cmp::Reverse(*mtime));
-    Ok(entries.into_iter().next().unwrap().0)
+    // Sort by filename descending (newest timestamp first).
+    entries.sort_by(|a, b| {
+        b.file_name()
+            .unwrap_or_default()
+            .cmp(a.file_name().unwrap_or_default())
+    });
+    Ok(entries.into_iter().next().unwrap())
 }
 
 // ---------------------------------------------------------------------------

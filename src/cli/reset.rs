@@ -51,7 +51,7 @@ pub fn run(yes: bool) -> anyhow::Result<()> {
     if let Err(e) = reapply_pending(&config, &migrations_dir) {
         // Clean up any partially-created database at the original path.
         let _ = std::fs::remove_file(&db_path);
-        for ext in ["-wal", "-shm"] {
+        for ext in ["-wal", "-shm", "-journal"] {
             let _ = std::fs::remove_file(snapshot::sidecar(&db_path, ext));
         }
         snapshot::restore_reset_backup(&db_path, &resets_dir)
