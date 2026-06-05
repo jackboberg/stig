@@ -8,6 +8,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, params};
+use sqlparser::dialect::SQLiteDialect;
+use sqlparser::parser::Parser;
 
 use crate::config::Config;
 use crate::db::Db;
@@ -28,17 +30,35 @@ pub fn schema_exists(config: &Config) -> bool {
 }
 
 /// Check whether the schema manifest has actual DDL content (not just the header).
+///
+/// Uses `sqlparser` to parse the file and checks whether any statements remain
+/// after stripping the standard header comment. This correctly handles both
+/// `--` line comments and `/* */` block comments.
 pub fn schema_has_content(config: &Config) -> bool {
     match load_schema_sql(config) {
         Ok(Some(sql)) => {
-            let stripped = sql
-                .lines()
-                .filter(|line| !line.trim().is_empty() && !line.trim().starts_with("--"))
-                .collect::<String>();
-            !stripped.is_empty()
+            let stripped = strip_header(&sql);
+            Parser::parse_sql(&SQLiteDialect {}, &stripped)
+                .map(|stmts| !stmts.is_empty())
+                .unwrap_or(false)
         }
         _ => false,
     }
+}
+
+/// Strip the standard header comment from schema SQL content.
+fn strip_header(sql: &str) -> String {
+    let mut result = sql.to_string();
+    for line in HEADER.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Some(pos) = result.find(trimmed) {
+            result.replace_range(pos..pos + line.len(), "");
+        }
+    }
+    result
 }
 
 /// Read the schema manifest file if it exists.
@@ -128,8 +148,9 @@ pub fn generate_schema_sql(conn: &Connection) -> Result<String> {
 /// Apply the schema manifest to a fresh database.
 ///
 /// Executes the schema SQL, then populates `schema_migrations` with all known
-/// migration versions and their checksums. Returns the number of migrations
-/// marked as applied.
+/// migration versions and their checksums. The entire operation is wrapped in
+/// an explicit transaction so that partial failures leave the database
+/// unchanged. Returns the number of migrations marked as applied.
 ///
 /// # Errors
 ///
@@ -143,21 +164,29 @@ pub fn apply_schema_manifest(db: &Db, config: &Config, files: &[MigrationFile]) 
         )
     })?;
 
-    let stripped = sql
-        .lines()
-        .filter(|line| !line.trim().is_empty() && !line.trim().starts_with("--"))
-        .collect::<String>();
+    let stripped = strip_header(&sql);
+    let stmts = Parser::parse_sql(&SQLiteDialect {}, &stripped).with_context(|| {
+        format!(
+            "failed to parse schema manifest: {}",
+            schema_path(config).display()
+        )
+    })?;
 
-    if stripped.is_empty() {
+    if stmts.is_empty() {
         return Err(anyhow::anyhow!(
             "schema manifest has no DDL content: {}",
             schema_path(config).display()
         ));
     }
 
-    db.connection()
-        .execute_batch(&sql)
-        .context("failed to execute schema manifest")?;
+    let conn = db.connection();
+    conn.execute_batch("BEGIN")
+        .context("failed to begin transaction")?;
+
+    if let Err(e) = conn.execute_batch(&sql) {
+        let _ = conn.execute_batch("ROLLBACK");
+        return Err(e).context("failed to execute schema manifest");
+    }
 
     let mut count = 0;
     for file in files {
@@ -166,15 +195,20 @@ pub fn apply_schema_manifest(db: &Db, config: &Config, files: &[MigrationFile]) 
             .with_context(|| format!("failed to read migration file: {}", file.path.display()))?;
         let checksum = sha256_hex(content.as_bytes());
 
-        db.connection()
-            .execute(
-                "INSERT INTO schema_migrations (version, checksum) VALUES (?1, ?2)",
-                params![version, checksum],
-            )
-            .with_context(|| format!("failed to record {version} in schema_migrations"))?;
+        if let Err(e) = conn.execute(
+            "INSERT INTO schema_migrations (version, checksum) VALUES (?1, ?2)",
+            params![version, checksum],
+        ) {
+            let _ = conn.execute_batch("ROLLBACK");
+            return Err(e)
+                .with_context(|| format!("failed to record {version} in schema_migrations"));
+        }
 
         count += 1;
     }
+
+    conn.execute_batch("COMMIT")
+        .context("failed to commit schema manifest transaction")?;
 
     Ok(count)
 }
@@ -288,6 +322,38 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("no DDL content"));
+    }
+
+    #[test]
+    fn schema_has_content_false_for_block_comments_only() {
+        let dir = TempDir::new().unwrap();
+        let config = Config {
+            project_root: dir.path().to_path_buf(),
+            schema_path: "db/schema.sql".to_string(),
+            ..Config::default()
+        };
+
+        std::fs::create_dir_all(dir.path().join("db")).unwrap();
+        let content = format!("{}\n/* some block comment */\n/* another */\n", HEADER);
+        std::fs::write(schema_path(&config), content).unwrap();
+
+        assert!(!schema_has_content(&config));
+    }
+
+    #[test]
+    fn schema_has_content_true_for_actual_ddl() {
+        let dir = TempDir::new().unwrap();
+        let config = Config {
+            project_root: dir.path().to_path_buf(),
+            schema_path: "db/schema.sql".to_string(),
+            ..Config::default()
+        };
+
+        std::fs::create_dir_all(dir.path().join("db")).unwrap();
+        let content = format!("{}\nCREATE TABLE foo (id INTEGER);\n", HEADER);
+        std::fs::write(schema_path(&config), content).unwrap();
+
+        assert!(schema_has_content(&config));
     }
 
     #[test]

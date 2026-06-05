@@ -94,8 +94,12 @@ fn create_backups_dir(config: &Config, project_root: &Path) -> anyhow::Result<()
     Ok(())
 }
 
-/// Create an initial empty schema manifest file.
+/// Create an initial empty schema manifest file if it does not already exist.
 fn create_schema_manifest(config: &Config) -> anyhow::Result<()> {
+    let path = schema::schema_path(config);
+    if path.exists() {
+        return Ok(());
+    }
     schema::write_schema_sql(config, "")
         .with_context(|| "failed to create schema manifest".to_string())?;
     println!("✓ created {}", config.schema_path);
