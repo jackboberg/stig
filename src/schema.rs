@@ -97,9 +97,12 @@ pub fn schema_version(config: &Config) -> Result<Option<String>> {
             if let Some(Expr::Value(ValueWithSpan {
                 value: sqlparser::ast::Value::SingleQuotedString(v),
                 ..
-            })) = row.first()
+            })) = row.content.first()
             {
-                latest = Some(v.clone());
+                latest = Some(match latest {
+                    Some(existing) => std::cmp::max(existing, v.clone()),
+                    None => v.clone(),
+                });
             }
         }
     }
@@ -224,7 +227,8 @@ pub fn generate_schema_sql(conn: &Connection, files: &[MigrationFile]) -> Result
 ///
 /// The manifest is a self-contained SQL file that includes both DDL statements
 /// and `INSERT INTO schema_migrations` rows. The entire file is executed as a
-/// single batch. Returns the number of migrations recorded.
+/// single batch. Returns the number of migrations recorded (queried from the
+/// database after execution).
 ///
 /// # Errors
 ///
@@ -251,28 +255,16 @@ pub fn apply_schema_manifest(db: &Db, config: &Config) -> Result<usize> {
         ));
     }
 
-    let count = stmts
-        .iter()
-        .filter(|s| {
-            use sqlparser::ast::Statement;
-            matches!(s, Statement::Insert { .. })
-        })
-        .count();
-
-    db.connection()
-        .execute_batch(
-            "CREATE TABLE IF NOT EXISTS schema_migrations (
-                version TEXT PRIMARY KEY,
-                checksum TEXT NOT NULL
-            );",
-        )
-        .context("failed to create schema_migrations table")?;
-
     db.connection()
         .execute_batch(&sql)
         .context("failed to execute schema manifest")?;
 
-    Ok(count)
+    let count: i64 = db
+        .connection()
+        .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
+        .context("failed to count applied migrations")?;
+
+    Ok(count as usize)
 }
 
 #[cfg(test)]
@@ -445,6 +437,9 @@ mod tests {
         std::fs::write(schema_path(&config), content).unwrap();
 
         let db = Db::open(&config).unwrap();
+        db.connection().execute_batch(
+            "CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')));",
+        ).unwrap();
 
         let count = apply_schema_manifest(&db, &config).unwrap();
         assert_eq!(count, 1);
@@ -516,6 +511,46 @@ mod tests {
 
         let version = schema_version(&config).unwrap().unwrap();
         assert_eq!(version, "20240102000000_beta");
+    }
+
+    #[test]
+    fn schema_version_tracks_max_not_last() {
+        let dir = TempDir::new().unwrap();
+        let config = Config {
+            project_root: dir.path().to_path_buf(),
+            schema_path: "db/schema.sql".to_string(),
+            ..Config::default()
+        };
+
+        let content = format!(
+            "{}\nCREATE TABLE foo (id INTEGER);\n\nINSERT INTO schema_migrations (version, checksum) VALUES ('20240103000000_gamma', 'ghi');\nINSERT INTO schema_migrations (version, checksum) VALUES ('20240101000000_alpha', 'abc');\nINSERT INTO schema_migrations (version, checksum) VALUES ('20240102000000_beta', 'def');",
+            HEADER
+        );
+        std::fs::create_dir_all(dir.path().join("db")).unwrap();
+        std::fs::write(schema_path(&config), content).unwrap();
+
+        let version = schema_version(&config).unwrap().unwrap();
+        assert_eq!(version, "20240103000000_gamma");
+    }
+
+    #[test]
+    fn schema_version_handles_multi_row_values() {
+        let dir = TempDir::new().unwrap();
+        let config = Config {
+            project_root: dir.path().to_path_buf(),
+            schema_path: "db/schema.sql".to_string(),
+            ..Config::default()
+        };
+
+        let content = format!(
+            "{}\nCREATE TABLE foo (id INTEGER);\n\nINSERT INTO schema_migrations (version, checksum) VALUES ('20240101000000_alpha', 'abc'), ('20240103000000_gamma', 'ghi'), ('20240102000000_beta', 'def');",
+            HEADER
+        );
+        std::fs::create_dir_all(dir.path().join("db")).unwrap();
+        std::fs::write(schema_path(&config), content).unwrap();
+
+        let version = schema_version(&config).unwrap().unwrap();
+        assert_eq!(version, "20240103000000_gamma");
     }
 
     #[test]

@@ -95,10 +95,21 @@ fn create_backups_dir(config: &Config, project_root: &Path) -> anyhow::Result<()
 }
 
 /// Create an initial empty schema manifest file if it does not already exist.
+///
+/// Returns a usage error if something other than a regular file exists at the
+/// target path (e.g. a directory), since later operations would fail with a
+/// less clear error.
 fn create_schema_manifest(config: &Config) -> anyhow::Result<()> {
     let path = schema::schema_path(config);
-    if path.exists() {
+    if path.is_file() {
         return Ok(());
+    }
+    if path.exists() {
+        return Err(CliError::Usage(format!(
+            "schema path exists but is not a regular file: {}",
+            path.display()
+        ))
+        .into());
     }
     schema::write_schema_sql(config, "")
         .with_context(|| "failed to create schema manifest".to_string())?;
