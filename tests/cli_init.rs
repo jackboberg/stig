@@ -100,3 +100,19 @@ fn schema_migrations_checksum_has_no_default() {
     )
     .expect("inserting with checksum should succeed");
 }
+
+// init exits 2 when schema path exists but is a directory
+#[test]
+fn init_exits_2_when_schema_path_is_directory() {
+    let dir = TempDir::new().unwrap();
+
+    // Pre-create a directory at the default schema path.
+    std::fs::create_dir_all(dir.path().join("db/schema.sql")).unwrap();
+
+    stig_cmd(&dir)
+        .arg("init")
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("not a regular file"));
+}
