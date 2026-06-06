@@ -55,8 +55,11 @@ pub fn run(yes: bool) -> anyhow::Result<()> {
         for ext in ["-wal", "-shm", "-journal"] {
             let _ = std::fs::remove_file(snapshot::sidecar(&db_path, ext));
         }
-        snapshot::restore_reset_backup_from_path(&backup_path, &db_path)
-            .context("failed to restore reset backup after reapply failure")?;
+        if let Err(restore_err) = snapshot::restore_reset_backup_from_path(&backup_path, &db_path) {
+            return Err(anyhow::anyhow!(
+                "reapply failed: {e}\nalso failed to restore reset backup: {restore_err}"
+            ));
+        }
         return Err(e);
     }
 
