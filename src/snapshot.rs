@@ -347,15 +347,28 @@ fn move_file(src: &Path, dst: &Path) -> Result<()> {
 }
 
 /// Move `path` to a sibling temp file and record `(original, temp)` in `saved`.
+///
+/// Uses a unique temp filename to avoid colliding with leftover `.stig-tmp`
+/// files from a previous crash.
 fn move_to_temp(path: &Path, saved: &mut Vec<(PathBuf, PathBuf)>) -> Result<()> {
-    let tmp = path.with_extension(format!(
-        "{}.stig-tmp",
-        path.extension().and_then(|e| e.to_str()).unwrap_or("db")
-    ));
-    move_file(path, &tmp)
-        .with_context(|| format!("failed to move {} to temp location", path.display()))?;
-    saved.push((path.to_path_buf(), tmp));
-    Ok(())
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("db");
+    let mut counter = 0u32;
+    loop {
+        let tmp = path.with_extension(format!("{ext}.stig-tmp.{counter}"));
+        if !tmp.exists() {
+            move_file(path, &tmp)
+                .with_context(|| format!("failed to move {} to temp location", path.display()))?;
+            saved.push((path.to_path_buf(), tmp));
+            return Ok(());
+        }
+        counter += 1;
+        if counter > 1000 {
+            anyhow::bail!(
+                "could not find unique temp filename for {} after 1000 attempts",
+                path.display()
+            );
+        }
+    }
 }
 
 /// Restore saved (original, temp) pairs by moving temp back to original.
