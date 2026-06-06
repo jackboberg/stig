@@ -31,16 +31,36 @@ pub fn schema_exists(config: &Config) -> bool {
 
 /// Check whether the schema manifest has actual DDL content (not just the header).
 ///
-/// Uses `sqlparser` to parse the file and checks whether any statements are
-/// present. Since `sqlparser` already ignores SQL comments, no manual header
-/// stripping is needed.
+/// Uses `sqlparser` to parse the file and checks whether any schema-creating
+/// DDL statements are present (CREATE TABLE, VIEW, INDEX, TRIGGER, or their
+/// ALTER variants). Since `sqlparser` already ignores SQL comments, no manual
+/// header stripping is needed.
 pub fn schema_has_content(config: &Config) -> bool {
     match load_schema_sql(config) {
         Ok(Some(sql)) => Parser::parse_sql(&SQLiteDialect {}, &sql)
-            .map(|stmts| !stmts.is_empty())
+            .map(|stmts| stmts.iter().any(is_schema_creating_statement))
             .unwrap_or(false),
         _ => false,
     }
+}
+
+/// Check whether a parsed SQL statement creates or alters a schema object.
+///
+/// Returns `true` for CREATE TABLE/VIEW/INDEX/TRIGGER and ALTER TABLE/VIEW/INDEX
+/// statements. Returns `false` for INSERT, SELECT, and other non-DDL statements.
+fn is_schema_creating_statement(stmt: &sqlparser::ast::Statement) -> bool {
+    use sqlparser::ast::Statement;
+    matches!(
+        stmt,
+        Statement::CreateTable(_)
+            | Statement::CreateView(_)
+            | Statement::CreateIndex(_)
+            | Statement::CreateTrigger(_)
+            | Statement::CreateVirtualTable { .. }
+            | Statement::AlterTable(_)
+            | Statement::AlterView { .. }
+            | Statement::AlterIndex { .. }
+    )
 }
 
 /// Extract the latest migration version embedded in the schema manifest.
@@ -248,7 +268,7 @@ pub fn apply_schema_manifest(db: &Db, config: &Config) -> Result<usize> {
         )
     })?;
 
-    if stmts.is_empty() {
+    if !stmts.iter().any(is_schema_creating_statement) {
         return Err(anyhow::anyhow!(
             "schema manifest has no DDL content: {}",
             schema_path(config).display()
@@ -420,6 +440,34 @@ mod tests {
     }
 
     #[test]
+    fn apply_schema_manifest_fails_when_inserts_only() {
+        let dir = TempDir::new().unwrap();
+        let config = Config {
+            project_root: dir.path().to_path_buf(),
+            schema_path: "db/schema.sql".to_string(),
+            database_path: ":memory:".to_string(),
+            ..Config::default()
+        };
+
+        let content = format!(
+            "{}\nINSERT INTO schema_migrations (version, checksum) VALUES ('20240101000000_test', 'abc123');",
+            HEADER
+        );
+        std::fs::create_dir_all(dir.path().join("db")).unwrap();
+        std::fs::write(schema_path(&config), content).unwrap();
+
+        let db = Db::open(&config).unwrap();
+        db.connection().execute_batch(
+            "CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')));",
+        ).unwrap();
+
+        let result = apply_schema_manifest(&db, &config);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("no DDL content"));
+    }
+
+    #[test]
     fn apply_schema_manifest_executes_ddl_and_inserts() {
         let dir = TempDir::new().unwrap();
         let config = Config {
@@ -491,6 +539,28 @@ mod tests {
         std::fs::write(schema_path(&config), content).unwrap();
 
         assert!(schema_has_content(&config));
+    }
+
+    #[test]
+    fn schema_has_content_false_for_inserts_only() {
+        let dir = TempDir::new().unwrap();
+        let config = Config {
+            project_root: dir.path().to_path_buf(),
+            schema_path: "db/schema.sql".to_string(),
+            ..Config::default()
+        };
+
+        std::fs::create_dir_all(dir.path().join("db")).unwrap();
+        let content = format!(
+            "{}\nINSERT INTO schema_migrations (version, checksum) VALUES ('20240101000000_alpha', 'abc');",
+            HEADER
+        );
+        std::fs::write(schema_path(&config), content).unwrap();
+
+        assert!(
+            !schema_has_content(&config),
+            "INSERT-only manifest should not count as having DDL content"
+        );
     }
 
     #[test]
