@@ -272,20 +272,24 @@ fn most_recent_reset(resets_dir: &Path) -> Result<PathBuf> {
 
     let mut entries: Vec<PathBuf> = std::fs::read_dir(resets_dir)
         .with_context(|| format!("failed to read directory {}", resets_dir.display()))?
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
+        .map(|entry| {
+            let entry = entry
+                .with_context(|| format!("failed to read entry in {}", resets_dir.display()))?;
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name.starts_with("reset-")
-                && name.ends_with(".db")
-                && entry.file_type().ok()?.is_file()
-            {
-                Some(entry.path())
-            } else {
-                None
+            if name.starts_with("reset-") && name.ends_with(".db") {
+                let is_file = entry
+                    .file_type()
+                    .with_context(|| format!("failed to read file type for {}", name))?
+                    .is_file();
+                if is_file {
+                    return Ok(Some(entry.path()));
+                }
             }
+            Ok(None)
         })
-        .collect();
+        .filter_map(|r| r.transpose())
+        .collect::<Result<Vec<_>>>()?;
 
     if entries.is_empty() {
         anyhow::bail!("no reset backups found in {}", resets_dir.display());
@@ -394,12 +398,15 @@ fn atomic_replace_with_rollback(pairs: &[(Option<PathBuf>, PathBuf)]) -> Result<
         return Err(e.context("failed to move existing files aside"));
     }
 
-    // Phase 2: Copy source files into destination positions, or ensure
-    // absence when `src` is `None`.
+    // Phase 2: Copy source files into destination positions, or remove
+    // destination when `src` is `None`.
     let copy_result = (|| -> Result<()> {
         for (src, dst) in pairs {
             if let Some(src) = src {
                 copy_file(src, dst)?;
+            } else if dst.exists() {
+                std::fs::remove_file(dst)
+                    .with_context(|| format!("failed to remove {}", dst.display()))?;
             }
         }
         Ok(())
