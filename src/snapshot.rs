@@ -364,8 +364,8 @@ fn restore_saved(saved: &[(PathBuf, PathBuf)]) {
     }
 }
 
-/// Atomically replace destination files with source files, preserving
-/// originals for rollback on failure.
+/// Replace destination files with source files, preserving originals for
+/// rollback on failure.
 ///
 /// Each `(src, dst)` pair is processed in two phases:
 /// 1. Move existing destination files to temp locations.
@@ -374,6 +374,9 @@ fn restore_saved(saved: &[(PathBuf, PathBuf)]) {
 ///
 /// If either phase fails, partially-written destination files are removed
 /// and originals are restored. On success, temp copies are deleted.
+///
+/// Note: This is rollback-safe, not truly atomic. A crash between phases
+/// can still leave the destination missing.
 fn atomic_replace_with_rollback(pairs: &[(Option<PathBuf>, PathBuf)]) -> Result<()> {
     // Phase 1: Move existing destination files aside.
     let mut saved: Vec<(PathBuf, PathBuf)> = Vec::new();
@@ -962,11 +965,9 @@ mod tests {
         let resets = dir.path().join("resets");
         std::fs::create_dir(&resets).unwrap();
 
-        // Two reset backups, older one first.
-        let old = write_file(&resets, "reset-20240101T000000Z.db", b"old");
-        filetime::set_file_mtime(&old, FileTime::from_unix_time(1_700_000_000, 0)).unwrap();
-        let new = write_file(&resets, "reset-20240102T000000Z.db", b"new");
-        filetime::set_file_mtime(&new, FileTime::from_unix_time(1_700_001_000, 0)).unwrap();
+        // Two reset backups; filename ordering determines recency.
+        write_file(&resets, "reset-20240101T000000Z.db", b"old");
+        write_file(&resets, "reset-20240102T000000Z.db", b"new");
 
         restore_reset_backup(&db, &resets).unwrap();
 
