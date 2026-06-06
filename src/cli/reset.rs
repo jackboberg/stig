@@ -78,23 +78,24 @@ fn confirm_or_abort(yes: bool) -> anyhow::Result<()> {
 }
 
 /// Open a fresh database and reapply all migrations. Uses the schema manifest
-/// if available for a fast reset; otherwise replays all migrations individually.
+/// if available and up to date for a fast reset; otherwise replays all
+/// migrations individually.
 fn reapply_pending(config: &Config, migrations_dir: &Path) -> anyhow::Result<()> {
     let db = Db::open(config)
         .with_context(|| format!("failed to open database at {}", config.database_path))?;
 
     ensure_schema_migrations(db.connection())?;
 
-    if schema::schema_has_content(config) {
-        let files = discover(migrations_dir).context("failed to discover migration files")?;
-        let n = schema::apply_schema_manifest(&db, config, &files)
+    let files = discover(migrations_dir).context("failed to discover migration files")?;
+
+    if schema::schema_has_content(config) && schema::schema_is_fresh(config, &files) {
+        let n = schema::apply_schema_manifest(&db, config)
             .context("failed to apply schema manifest")?;
         println!(
             "✓ applied {} ({n} migrations marked as applied)",
             config.schema_path
         );
     } else {
-        let files = discover(migrations_dir).context("failed to discover migration files")?;
         let plan = Plan::build(&files, db.connection())?;
         apply::apply_pending(&db, &plan, config, false)?;
     }

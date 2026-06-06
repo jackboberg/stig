@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use rusqlite::{Connection, params};
+use rusqlite::Connection;
 use sqlparser::dialect::SQLiteDialect;
 use sqlparser::parser::Parser;
 
@@ -31,34 +31,96 @@ pub fn schema_exists(config: &Config) -> bool {
 
 /// Check whether the schema manifest has actual DDL content (not just the header).
 ///
-/// Uses `sqlparser` to parse the file and checks whether any statements remain
-/// after stripping the standard header comment. This correctly handles both
-/// `--` line comments and `/* */` block comments.
+/// Uses `sqlparser` to parse the file and checks whether any statements are
+/// present. Since `sqlparser` already ignores SQL comments, no manual header
+/// stripping is needed.
 pub fn schema_has_content(config: &Config) -> bool {
     match load_schema_sql(config) {
-        Ok(Some(sql)) => {
-            let stripped = strip_header(&sql);
-            Parser::parse_sql(&SQLiteDialect {}, &stripped)
-                .map(|stmts| !stmts.is_empty())
-                .unwrap_or(false)
-        }
+        Ok(Some(sql)) => Parser::parse_sql(&SQLiteDialect {}, &sql)
+            .map(|stmts| !stmts.is_empty())
+            .unwrap_or(false),
         _ => false,
     }
 }
 
-/// Strip the standard header comment from schema SQL content.
-fn strip_header(sql: &str) -> String {
-    let mut result = sql.to_string();
-    for line in HEADER.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() {
+/// Extract the latest migration version embedded in the schema manifest.
+///
+/// Uses `sqlparser` to parse INSERT statements targeting `schema_migrations`
+/// and extracts the version column value. Returns `None` if no matching
+/// INSERT statements are found.
+pub fn schema_version(config: &Config) -> Result<Option<String>> {
+    use sqlparser::ast::{Expr, Statement, TableObject, ValueWithSpan};
+
+    let sql = match load_schema_sql(config)? {
+        Some(s) => s,
+        None => return Ok(None),
+    };
+
+    let stmts = Parser::parse_sql(&SQLiteDialect {}, &sql).with_context(|| {
+        format!(
+            "failed to parse schema manifest for version extraction: {}",
+            schema_path(config).display()
+        )
+    })?;
+
+    let mut latest: Option<String> = None;
+    for stmt in stmts {
+        let Statement::Insert(insert) = stmt else {
+            continue;
+        };
+
+        let TableObject::TableName(table_name) = &insert.table else {
+            continue;
+        };
+
+        let name_str = table_name
+            .0
+            .iter()
+            .filter_map(|part| part.as_ident())
+            .map(|ident| ident.value.as_str())
+            .collect::<Vec<_>>()
+            .join(".");
+
+        if name_str != "schema_migrations" {
             continue;
         }
-        if let Some(pos) = result.find(trimmed) {
-            result.replace_range(pos..pos + line.len(), "");
+
+        let Some(source) = &insert.source else {
+            continue;
+        };
+
+        let sqlparser::ast::SetExpr::Values(values) = source.body.as_ref() else {
+            continue;
+        };
+
+        for row in &values.rows {
+            if let Some(Expr::Value(ValueWithSpan {
+                value: sqlparser::ast::Value::SingleQuotedString(v),
+                ..
+            })) = row.first()
+            {
+                latest = Some(v.clone());
+            }
         }
     }
-    result
+
+    Ok(latest)
+}
+
+/// Check whether the schema manifest is up to date with the current migration files.
+///
+/// Returns `true` if the manifest's embedded version matches (or is newer than)
+/// the latest on-disk migration. Returns `false` if any migration file on disk
+/// is newer than what the manifest contains.
+pub fn schema_is_fresh(config: &Config, files: &[MigrationFile]) -> bool {
+    let manifest_version = match schema_version(config) {
+        Ok(Some(v)) => v,
+        _ => return false,
+    };
+
+    let latest_on_disk = files.iter().map(|f| f.version()).max().unwrap_or_default();
+
+    manifest_version >= latest_on_disk
 }
 
 /// Read the schema manifest file if it exists.
@@ -98,8 +160,9 @@ pub fn write_schema_sql(config: &Config, sql: &str) -> Result<()> {
 /// Excludes internal SQLite objects (`sqlite_%`) and the `schema_migrations`
 /// tracking table. Returns statements in dependency-safe order: tables first,
 /// then views, then indexes, then triggers. Each statement is terminated with
-/// a semicolon.
-pub fn generate_schema_sql(conn: &Connection) -> Result<String> {
+/// a semicolon. Appends `INSERT INTO schema_migrations` statements for all
+/// applied migrations so the manifest is fully self-contained.
+pub fn generate_schema_sql(conn: &Connection, files: &[MigrationFile]) -> Result<String> {
     let mut stmt = conn
         .prepare(
             "SELECT sql FROM sqlite_master \
@@ -142,21 +205,31 @@ pub fn generate_schema_sql(conn: &Connection) -> Result<String> {
         })
         .collect();
 
-    Ok(with_semicolons.join("\n\n"))
+    let mut parts = vec![with_semicolons.join("\n\n")];
+
+    for file in files {
+        let version = file.version();
+        let content = std::fs::read_to_string(&file.path)
+            .with_context(|| format!("failed to read migration file: {}", file.path.display()))?;
+        let checksum = sha256_hex(content.as_bytes());
+        parts.push(format!(
+            "INSERT INTO schema_migrations (version, checksum) VALUES ('{version}', '{checksum}');"
+        ));
+    }
+
+    Ok(parts.join("\n\n"))
 }
 
 /// Apply the schema manifest to a fresh database.
 ///
-/// Executes the schema SQL, then populates `schema_migrations` with all known
-/// migration versions and their checksums. The entire operation is wrapped in
-/// an explicit transaction so that partial failures leave the database
-/// unchanged. Returns the number of migrations marked as applied.
+/// The manifest is a self-contained SQL file that includes both DDL statements
+/// and `INSERT INTO schema_migrations` rows. The entire file is executed as a
+/// single batch. Returns the number of migrations recorded.
 ///
 /// # Errors
 ///
-/// Returns an error if the manifest file is missing or contains no DDL
-/// content (header-only).
-pub fn apply_schema_manifest(db: &Db, config: &Config, files: &[MigrationFile]) -> Result<usize> {
+/// Returns an error if the manifest file is missing or contains no statements.
+pub fn apply_schema_manifest(db: &Db, config: &Config) -> Result<usize> {
     let sql = load_schema_sql(config)?.ok_or_else(|| {
         anyhow::anyhow!(
             "schema manifest not found: {}",
@@ -164,8 +237,7 @@ pub fn apply_schema_manifest(db: &Db, config: &Config, files: &[MigrationFile]) 
         )
     })?;
 
-    let stripped = strip_header(&sql);
-    let stmts = Parser::parse_sql(&SQLiteDialect {}, &stripped).with_context(|| {
+    let stmts = Parser::parse_sql(&SQLiteDialect {}, &sql).with_context(|| {
         format!(
             "failed to parse schema manifest: {}",
             schema_path(config).display()
@@ -179,36 +251,26 @@ pub fn apply_schema_manifest(db: &Db, config: &Config, files: &[MigrationFile]) 
         ));
     }
 
-    let conn = db.connection();
-    conn.execute_batch("BEGIN")
-        .context("failed to begin transaction")?;
+    let count = stmts
+        .iter()
+        .filter(|s| {
+            use sqlparser::ast::Statement;
+            matches!(s, Statement::Insert { .. })
+        })
+        .count();
 
-    if let Err(e) = conn.execute_batch(&sql) {
-        let _ = conn.execute_batch("ROLLBACK");
-        return Err(e).context("failed to execute schema manifest");
-    }
+    db.connection()
+        .execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_migrations (
+                version TEXT PRIMARY KEY,
+                checksum TEXT NOT NULL
+            );",
+        )
+        .context("failed to create schema_migrations table")?;
 
-    let mut count = 0;
-    for file in files {
-        let version = file.version();
-        let content = std::fs::read_to_string(&file.path)
-            .with_context(|| format!("failed to read migration file: {}", file.path.display()))?;
-        let checksum = sha256_hex(content.as_bytes());
-
-        if let Err(e) = conn.execute(
-            "INSERT INTO schema_migrations (version, checksum) VALUES (?1, ?2)",
-            params![version, checksum],
-        ) {
-            let _ = conn.execute_batch("ROLLBACK");
-            return Err(e)
-                .with_context(|| format!("failed to record {version} in schema_migrations"));
-        }
-
-        count += 1;
-    }
-
-    conn.execute_batch("COMMIT")
-        .context("failed to commit schema manifest transaction")?;
+    db.connection()
+        .execute_batch(&sql)
+        .context("failed to execute schema manifest")?;
 
     Ok(count)
 }
@@ -231,10 +293,28 @@ mod tests {
         conn
     }
 
+    fn write_migration_file(
+        dir: &TempDir,
+        timestamp: &str,
+        slug: &str,
+        content: &str,
+    ) -> MigrationFile {
+        let migrations_dir = dir.path().join("db/migrations");
+        std::fs::create_dir_all(&migrations_dir).unwrap();
+        let filename = format!("{timestamp}_{slug}.sql");
+        let path = migrations_dir.join(&filename);
+        std::fs::write(&path, content).unwrap();
+        MigrationFile {
+            timestamp: timestamp.to_string(),
+            slug: slug.to_string(),
+            path,
+        }
+    }
+
     #[test]
     fn generate_schema_sql_returns_all_ddl() {
         let conn = setup_db();
-        let sql = generate_schema_sql(&conn).unwrap();
+        let sql = generate_schema_sql(&conn, &[]).unwrap();
 
         assert!(sql.contains("CREATE TABLE users"));
         assert!(sql.contains("CREATE TABLE posts"));
@@ -249,7 +329,7 @@ mod tests {
         )
         .unwrap();
 
-        let sql = generate_schema_sql(&conn).unwrap();
+        let sql = generate_schema_sql(&conn, &[]).unwrap();
         assert!(
             !sql.contains("schema_migrations"),
             "schema_migrations should be excluded"
@@ -259,7 +339,7 @@ mod tests {
     #[test]
     fn generate_schema_sql_excludes_sqlite_internal() {
         let conn = setup_db();
-        let sql = generate_schema_sql(&conn).unwrap();
+        let sql = generate_schema_sql(&conn, &[]).unwrap();
         assert!(
             !sql.contains("sqlite_"),
             "internal SQLite objects should be excluded"
@@ -269,14 +349,14 @@ mod tests {
     #[test]
     fn generate_schema_sql_empty_database() {
         let conn = Connection::open_in_memory().unwrap();
-        let sql = generate_schema_sql(&conn).unwrap();
+        let sql = generate_schema_sql(&conn, &[]).unwrap();
         assert!(sql.is_empty());
     }
 
     #[test]
     fn generate_schema_sql_tables_before_indexes() {
         let conn = setup_db();
-        let sql = generate_schema_sql(&conn).unwrap();
+        let sql = generate_schema_sql(&conn, &[]).unwrap();
 
         let table_pos = sql.find("CREATE TABLE users").unwrap();
         let index_pos = sql.find("CREATE INDEX idx_posts_user_id").unwrap();
@@ -284,6 +364,29 @@ mod tests {
             table_pos < index_pos,
             "tables must appear before indexes in generated schema"
         );
+    }
+
+    #[test]
+    fn generate_schema_sql_embeds_migration_inserts() {
+        let dir = TempDir::new().unwrap();
+        let conn = setup_db();
+        conn.execute_batch(
+            "CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, checksum TEXT NOT NULL);
+             INSERT INTO schema_migrations (version, checksum) VALUES ('20240101000000_alpha', 'abc123');",
+        )
+        .unwrap();
+
+        let files = vec![write_migration_file(
+            &dir,
+            "20240101000000",
+            "alpha",
+            "CREATE TABLE foo (id INTEGER);",
+        )];
+
+        let sql = generate_schema_sql(&conn, &files).unwrap();
+        assert!(sql.contains("INSERT INTO schema_migrations"));
+        assert!(sql.contains("20240101000000_alpha"));
+        assert!(sql.contains("checksum"));
     }
 
     #[test]
@@ -298,7 +401,7 @@ mod tests {
 
         let db = Db::open(&config).unwrap();
 
-        let result = apply_schema_manifest(&db, &config, &[]);
+        let result = apply_schema_manifest(&db, &config);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("not found"));
@@ -318,10 +421,49 @@ mod tests {
 
         let db = Db::open(&config).unwrap();
 
-        let result = apply_schema_manifest(&db, &config, &[]);
+        let result = apply_schema_manifest(&db, &config);
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("no DDL content"));
+    }
+
+    #[test]
+    fn apply_schema_manifest_executes_ddl_and_inserts() {
+        let dir = TempDir::new().unwrap();
+        let config = Config {
+            project_root: dir.path().to_path_buf(),
+            schema_path: "db/schema.sql".to_string(),
+            database_path: ":memory:".to_string(),
+            ..Config::default()
+        };
+
+        let content = format!(
+            "{}\nCREATE TABLE foo (id INTEGER PRIMARY KEY);\n\nINSERT INTO schema_migrations (version, checksum) VALUES ('20240101000000_test', 'abc123');",
+            HEADER
+        );
+        std::fs::create_dir_all(dir.path().join("db")).unwrap();
+        std::fs::write(schema_path(&config), content).unwrap();
+
+        let db = Db::open(&config).unwrap();
+
+        let count = apply_schema_manifest(&db, &config).unwrap();
+        assert_eq!(count, 1);
+
+        let table_count: i64 = db
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='foo'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_count, 1);
+
+        let migration_count: i64 = db
+            .connection()
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(migration_count, 1);
     }
 
     #[test]
@@ -354,6 +496,90 @@ mod tests {
         std::fs::write(schema_path(&config), content).unwrap();
 
         assert!(schema_has_content(&config));
+    }
+
+    #[test]
+    fn schema_version_extracts_latest() {
+        let dir = TempDir::new().unwrap();
+        let config = Config {
+            project_root: dir.path().to_path_buf(),
+            schema_path: "db/schema.sql".to_string(),
+            ..Config::default()
+        };
+
+        let content = format!(
+            "{}\nCREATE TABLE foo (id INTEGER);\n\nINSERT INTO schema_migrations (version, checksum) VALUES ('20240101000000_alpha', 'abc');\nINSERT INTO schema_migrations (version, checksum) VALUES ('20240102000000_beta', 'def');",
+            HEADER
+        );
+        std::fs::create_dir_all(dir.path().join("db")).unwrap();
+        std::fs::write(schema_path(&config), content).unwrap();
+
+        let version = schema_version(&config).unwrap().unwrap();
+        assert_eq!(version, "20240102000000_beta");
+    }
+
+    #[test]
+    fn schema_version_returns_none_when_no_inserts() {
+        let dir = TempDir::new().unwrap();
+        let config = Config {
+            project_root: dir.path().to_path_buf(),
+            schema_path: "db/schema.sql".to_string(),
+            ..Config::default()
+        };
+
+        let content = format!("{}\nCREATE TABLE foo (id INTEGER);\n", HEADER);
+        std::fs::create_dir_all(dir.path().join("db")).unwrap();
+        std::fs::write(schema_path(&config), content).unwrap();
+
+        assert!(schema_version(&config).unwrap().is_none());
+    }
+
+    #[test]
+    fn schema_is_fresh_true_when_up_to_date() {
+        let dir = TempDir::new().unwrap();
+        let config = Config {
+            project_root: dir.path().to_path_buf(),
+            schema_path: "db/schema.sql".to_string(),
+            ..Config::default()
+        };
+
+        let content = format!(
+            "{}\nCREATE TABLE foo (id INTEGER);\n\nINSERT INTO schema_migrations (version, checksum) VALUES ('20240102000000_beta', 'abc');",
+            HEADER
+        );
+        std::fs::create_dir_all(dir.path().join("db")).unwrap();
+        std::fs::write(schema_path(&config), content).unwrap();
+
+        let files = vec![
+            write_migration_file(&dir, "20240101000000", "alpha", "SELECT 1;"),
+            write_migration_file(&dir, "20240102000000", "beta", "SELECT 2;"),
+        ];
+
+        assert!(schema_is_fresh(&config, &files));
+    }
+
+    #[test]
+    fn schema_is_fresh_false_when_stale() {
+        let dir = TempDir::new().unwrap();
+        let config = Config {
+            project_root: dir.path().to_path_buf(),
+            schema_path: "db/schema.sql".to_string(),
+            ..Config::default()
+        };
+
+        let content = format!(
+            "{}\nCREATE TABLE foo (id INTEGER);\n\nINSERT INTO schema_migrations (version, checksum) VALUES ('20240101000000_alpha', 'abc');",
+            HEADER
+        );
+        std::fs::create_dir_all(dir.path().join("db")).unwrap();
+        std::fs::write(schema_path(&config), content).unwrap();
+
+        let files = vec![
+            write_migration_file(&dir, "20240101000000", "alpha", "SELECT 1;"),
+            write_migration_file(&dir, "20240102000000", "beta", "SELECT 2;"),
+        ];
+
+        assert!(!schema_is_fresh(&config, &files));
     }
 
     #[test]

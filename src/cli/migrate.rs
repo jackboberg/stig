@@ -45,8 +45,12 @@ pub fn run(dry_run: bool) -> anyhow::Result<()> {
     let n_pending = plan.pending().len();
     let n_already = n_current - n_pending;
 
-    if !dry_run && n_pending == n_current && schema::schema_has_content(&config) {
-        let n_applied = schema::apply_schema_manifest(&db, &config, &files)
+    if !dry_run
+        && n_pending == n_current
+        && schema::schema_has_content(&config)
+        && schema::schema_is_fresh(&config, &files)
+    {
+        let n_applied = schema::apply_schema_manifest(&db, &config)
             .context("failed to apply schema manifest")?;
         println!(
             "✓ applied {} ({n_applied} migrations marked as applied)",
@@ -63,7 +67,7 @@ pub fn run(dry_run: bool) -> anyhow::Result<()> {
             if n_pending > 0 {
                 let plan_after = Plan::build(&files, db.connection())?;
                 if plan_after.pending().is_empty() {
-                    let sql = schema::generate_schema_sql(db.connection())
+                    let sql = schema::generate_schema_sql(db.connection(), &files)
                         .context("failed to generate schema manifest")?;
                     schema::write_schema_sql(&config, &sql)
                         .context("failed to write schema manifest")?;
