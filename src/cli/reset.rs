@@ -46,7 +46,8 @@ pub fn run(yes: bool) -> anyhow::Result<()> {
     let db_path = config.resolve_path(&config.database_path);
 
     println!("moving database to resets/");
-    snapshot::take_reset_backup(&db_path, &resets_dir).context("failed to create reset backup")?;
+    let backup_path = snapshot::take_reset_backup(&db_path, &resets_dir)
+        .context("failed to create reset backup")?;
 
     if let Err(e) = reapply_pending(&config, &migrations_dir) {
         // Clean up any partially-created database at the original path.
@@ -54,7 +55,7 @@ pub fn run(yes: bool) -> anyhow::Result<()> {
         for ext in ["-wal", "-shm", "-journal"] {
             let _ = std::fs::remove_file(snapshot::sidecar(&db_path, ext));
         }
-        snapshot::restore_reset_backup(&db_path, &resets_dir)
+        snapshot::restore_reset_backup_from_path(&backup_path, &db_path)
             .context("failed to restore reset backup after reapply failure")?;
         return Err(e);
     }

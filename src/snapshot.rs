@@ -230,6 +230,25 @@ pub fn prune_resets(resets_dir: &Path, keep: u32) -> Result<()> {
     prune_dir(resets_dir, "reset-", keep)
 }
 
+/// Restore a specific reset backup file (plus `-wal`/`-shm` sidecars) back
+/// to `db_path`.
+///
+/// Uses the same rollback-safety pattern as [`restore_snapshot`]: before
+/// overwriting the live database, any partial files at the destination are
+/// moved to a temporary location and restored on failure.
+pub fn restore_reset_backup_from_path(backup_path: &Path, db_path: &Path) -> Result<()> {
+    let mut pairs: Vec<(Option<PathBuf>, PathBuf)> =
+        vec![(Some(backup_path.to_path_buf()), db_path.to_path_buf())];
+    for ext in ["-wal", "-shm"] {
+        let src = sidecar(backup_path, ext);
+        let src_opt = if src.exists() { Some(src) } else { None };
+        pairs.push((src_opt, sidecar(db_path, ext)));
+    }
+
+    atomic_replace_with_rollback(&pairs)
+        .context("failed to restore reset backup; original state restored")
+}
+
 /// Find the most recent `reset-*.db` backup in `resets_dir` and copy it
 /// (plus `-wal`/`-shm` sidecars) back to `db_path`.
 ///
@@ -240,17 +259,7 @@ pub fn prune_resets(resets_dir: &Path, keep: u32) -> Result<()> {
 /// Returns an error if no reset backup exists.
 pub fn restore_reset_backup(db_path: &Path, resets_dir: &Path) -> Result<()> {
     let backup = most_recent_reset(resets_dir)?;
-
-    let mut pairs: Vec<(Option<PathBuf>, PathBuf)> =
-        vec![(Some(backup.clone()), db_path.to_path_buf())];
-    for ext in ["-wal", "-shm"] {
-        let src = sidecar(&backup, ext);
-        let src_opt = if src.exists() { Some(src) } else { None };
-        pairs.push((src_opt, sidecar(db_path, ext)));
-    }
-
-    atomic_replace_with_rollback(&pairs)
-        .context("failed to restore reset backup; original state restored")
+    restore_reset_backup_from_path(&backup, db_path)
 }
 
 /// Return the path of the most recent `reset-*.db` file in `resets_dir`
@@ -267,7 +276,10 @@ fn most_recent_reset(resets_dir: &Path) -> Result<PathBuf> {
             let entry = entry.ok()?;
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name.starts_with("reset-") && name.ends_with(".db") {
+            if name.starts_with("reset-")
+                && name.ends_with(".db")
+                && entry.file_type().ok()?.is_file()
+            {
                 Some(entry.path())
             } else {
                 None

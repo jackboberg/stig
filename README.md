@@ -148,8 +148,9 @@ Use this when a migration has been edited but its snapshot has already been
 pruned, or when you want a clean slate.
 
 **Safety:** If re-applying migrations fails partway through, the original
-database is automatically restored from the reset backup. This ensures reset
-is atomic — either it fully succeeds or the database is left unchanged.
+database is automatically restored from the reset backup. This makes reset
+best-effort atomic — if restoration also fails (e.g. I/O error), the reset
+backup remains in the `resets/` directory for manual recovery.
 
 ```sh
 # Chain with your project's seed command
