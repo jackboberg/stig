@@ -5,6 +5,7 @@ pub mod migrate;
 pub mod new;
 pub mod redo;
 pub mod reset;
+pub mod schema;
 pub mod status;
 
 use clap::Subcommand;
@@ -19,5 +20,16 @@ pub enum BackupsCommand {
         /// Skip confirmation prompt
         #[arg(long)]
         yes: bool,
+    },
+}
+
+/// Subcommands for `stig schema`.
+#[derive(Debug, Subcommand)]
+pub enum SchemaCommand {
+    /// Generate a migration from the difference between the current database and the migration baseline.
+    Diff {
+        /// Write the generated migration to a file instead of stdout
+        #[arg(long)]
+        output: Option<String>,
     },
 }

@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use stig::cli::BackupsCommand;
+use stig::cli::{BackupsCommand, SchemaCommand};
 use stig::errors::CliError;
 
 #[derive(Debug, Parser)]
@@ -53,6 +53,11 @@ enum Command {
         #[command(subcommand)]
         command: BackupsCommand,
     },
+    /// Compare database schema to migration baseline.
+    Schema {
+        #[command(subcommand)]
+        command: SchemaCommand,
+    },
 }
 
 fn main() {
@@ -70,6 +75,7 @@ fn main() {
         Command::Reset { yes } => stig::cli::reset::run(yes),
         Command::Generate { target_name } => stig::cli::generate::run(target_name),
         Command::Backups { command } => stig::cli::backups::run(command),
+        Command::Schema { command } => stig::cli::schema::run(command),
     };
 
     if let Err(e) = result {
