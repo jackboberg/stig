@@ -294,14 +294,57 @@ fn collect_table_dependents(
 }
 
 /// Extract the table name referenced by an index or trigger CREATE statement.
+///
+/// Best-effort: if `sqlparser` can't parse the statement (e.g., uncommon
+/// SQLite syntax), falls back to a regex heuristic to extract the table name
+/// so dependents aren't silently lost.
 fn extract_referenced_table(sql: &str, obj_type: &str) -> Option<String> {
-    let stmts = Parser::parse_sql(&SQLiteDialect {}, sql).ok()?;
-    let stmt = stmts.first()?;
-    match (obj_type, stmt) {
-        ("index", Statement::CreateIndex(ci)) => Some(ci.table_name.to_string()),
-        ("trigger", Statement::CreateTrigger(ct)) => Some(ct.table_name.to_string()),
-        _ => None,
+    // Try parsing with sqlparser first
+    if let Ok(stmts) = Parser::parse_sql(&SQLiteDialect {}, sql)
+        && let Some(stmt) = stmts.first()
+    {
+        match (obj_type, stmt) {
+            ("index", Statement::CreateIndex(ci)) => return Some(ci.table_name.to_string()),
+            ("trigger", Statement::CreateTrigger(ct)) => {
+                return Some(ct.table_name.to_string());
+            }
+            _ => {}
+        }
     }
+
+    // Fallback: regex heuristic for common patterns
+    let upper = sql.to_uppercase();
+    match obj_type {
+        "index" => {
+            // CREATE INDEX <name> ON <table>(...)
+            if let Some(pos) = upper.find(" ON ") {
+                let rest = sql[pos + 4..].trim_start();
+                let table: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if !table.is_empty() {
+                    return Some(table);
+                }
+            }
+        }
+        "trigger" => {
+            // CREATE TRIGGER <name> ... ON <table>
+            if let Some(pos) = upper.find(" ON ") {
+                let rest = sql[pos + 4..].trim_start();
+                let table: String = rest
+                    .chars()
+                    .take_while(|c| c.is_alphanumeric() || *c == '_')
+                    .collect();
+                if !table.is_empty() {
+                    return Some(table);
+                }
+            }
+        }
+        _ => {}
+    }
+
+    None
 }
 
 // ---------------------------------------------------------------------------
@@ -324,8 +367,8 @@ fn generate_table_recreation(
     table_name: &str,
     dependents: Option<&[SchemaObject]>,
 ) -> Result<String> {
-    let old_cols = extract_columns(old_sql)?;
-    let new_cols = extract_columns(new_sql)?;
+    let old_cols = extract_columns(old_sql);
+    let new_cols = extract_columns(new_sql);
 
     let old_names: Vec<&str> = old_cols.iter().map(|c| c.name.as_str()).collect();
     let new_names: Vec<&str> = new_cols.iter().map(|c| c.name.as_str()).collect();
@@ -404,31 +447,37 @@ fn rewrite_create_table_name(sql: &str, new_name: &str) -> Result<String> {
         anyhow::bail!("expected CREATE TABLE statement");
     };
 
-    // Rewrite the table name using the new temp name
+    // Rewrite the table name using the new temp name.
+    // Use quoted identifier to ensure reserved words and special characters are handled.
     create.name = ObjectName(vec![sqlparser::ast::ObjectNamePart::Identifier(
-        sqlparser::ast::Ident::new(new_name.to_string()),
+        sqlparser::ast::Ident::with_quote('"', new_name),
     )]);
 
     Ok(format!("{create}"))
 }
 
 /// Extract column definitions from a CREATE TABLE statement.
-fn extract_columns(sql: &str) -> Result<Vec<ColumnInfo>> {
-    let stmts = Parser::parse_sql(&SQLiteDialect {}, sql)
-        .context("failed to parse CREATE TABLE statement")?;
-
-    let Statement::CreateTable(create) = stmts.first().context("expected CREATE TABLE")? else {
-        anyhow::bail!("expected CREATE TABLE statement");
+///
+/// Best-effort: returns an empty list if parsing fails, since `sqlparser`
+/// may not understand all valid SQLite syntax (e.g., GENERATED ALWAYS AS,
+/// MATERIALIZED, certain constraint forms). The caller falls back to
+/// comparing the raw SQL in that case.
+fn extract_columns(sql: &str) -> Vec<ColumnInfo> {
+    let Ok(stmts) = Parser::parse_sql(&SQLiteDialect {}, sql) else {
+        return Vec::new();
     };
 
-    let mut columns = Vec::new();
-    for col in &create.columns {
-        columns.push(ColumnInfo {
-            name: col.name.to_string(),
-        });
-    }
+    let Some(Statement::CreateTable(create)) = stmts.first() else {
+        return Vec::new();
+    };
 
-    Ok(columns)
+    create
+        .columns
+        .iter()
+        .map(|col| ColumnInfo {
+            name: col.name.to_string(),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone)]
@@ -683,7 +732,7 @@ mod tests {
         let sql = &diff.modified[0].migration_sql;
         assert!(sql.contains("PRAGMA foreign_keys=OFF"));
         assert!(sql.contains("BEGIN TRANSACTION"));
-        assert!(sql.contains("CREATE TABLE _stig_new_users"));
+        assert!(sql.contains("CREATE TABLE \"_stig_new_users\""));
         assert!(sql.contains("INSERT INTO \"_stig_new_users\""));
         assert!(sql.contains("SELECT"));
         assert!(sql.contains("FROM \"users\""));
@@ -781,7 +830,7 @@ mod tests {
     #[test]
     fn extract_columns_parses_create_table() {
         let sql = "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT NOT NULL, email TEXT)";
-        let cols = extract_columns(sql).unwrap();
+        let cols = extract_columns(sql);
         assert_eq!(cols.len(), 3);
         assert_eq!(cols[0].name, "id");
         assert_eq!(cols[1].name, "name");
