@@ -32,9 +32,10 @@ struct SchemaObject {
 /// Key used to identify a schema object in the comparison map.
 type SchemaKey = (String, String); // (type, name)
 
-/// A table that exists in both schemas but with a modified definition.
+/// A modified schema object (table or non-table) with its migration SQL.
 #[derive(Debug, Clone)]
-struct ModifiedTable {
+struct ModifiedObject {
+    obj_type: String,
     name: String,
     migration_sql: String,
 }
@@ -44,7 +45,7 @@ struct ModifiedTable {
 struct SchemaDiff {
     added: Vec<SchemaObject>,
     removed: Vec<SchemaObject>,
-    modified: Vec<ModifiedTable>,
+    modified: Vec<ModifiedObject>,
 }
 
 // ---------------------------------------------------------------------------
@@ -180,7 +181,8 @@ fn compute_diff(
                         &obj.name,
                         table_dependents.get(&obj.name).map(|v| v.as_slice()),
                     )?;
-                    modified.push(ModifiedTable {
+                    modified.push(ModifiedObject {
+                        obj_type: key.0.clone(),
                         name: obj.name.clone(),
                         migration_sql,
                     });
@@ -191,7 +193,8 @@ fn compute_diff(
                         quote_name(&key.1)
                     );
                     let create_sql = ensure_semicolon(&obj.sql);
-                    modified.push(ModifiedTable {
+                    modified.push(ModifiedObject {
+                        obj_type: key.0.clone(),
                         name: obj.name.clone(),
                         migration_sql: format!("{drop_sql}\n\n{create_sql}"),
                     });
@@ -244,22 +247,8 @@ fn extract_referenced_table(sql: &str, obj_type: &str) -> Option<String> {
     let stmts = Parser::parse_sql(&SQLiteDialect {}, sql).ok()?;
     let stmt = stmts.first()?;
     match (obj_type, stmt) {
-        ("index", Statement::CreateIndex(ci)) => Some(
-            ci.table_name
-                .0
-                .iter()
-                .filter_map(|p| p.as_ident())
-                .map(|i| i.value.clone())
-                .collect(),
-        ),
-        ("trigger", Statement::CreateTrigger(ct)) => Some(
-            ct.table_name
-                .0
-                .iter()
-                .filter_map(|p| p.as_ident())
-                .map(|i| i.value.clone())
-                .collect(),
-        ),
+        ("index", Statement::CreateIndex(ci)) => Some(ci.table_name.to_string()),
+        ("trigger", Statement::CreateTrigger(ct)) => Some(ct.table_name.to_string()),
         _ => None,
     }
 }
@@ -296,16 +285,21 @@ fn generate_table_recreation(
         .collect();
 
     let temp_name = format!("_stig_old_{table_name}");
+    let table_ident = quote_name(table_name);
+    let temp_ident = quote_name(&temp_name);
 
     let mut parts = Vec::new();
     parts.push("PRAGMA foreign_keys=OFF;".to_string());
     parts.push("BEGIN TRANSACTION;".to_string());
 
     // Step 1: Rename existing table aside
-    parts.push(format!("ALTER TABLE {table_name} RENAME TO {temp_name};"));
+    parts.push(format!("ALTER TABLE {table_ident} RENAME TO {temp_ident};"));
 
     // Step 2: Create the new table (under the original name)
-    parts.push(format!("\n-- New table definition\n{new_sql}"));
+    parts.push(format!(
+        "\n-- New table definition\n{}",
+        ensure_semicolon(new_sql)
+    ));
 
     // Step 3: Copy data from the renamed table
     if !common.is_empty() {
@@ -315,12 +309,12 @@ fn generate_table_recreation(
             .collect::<Vec<_>>()
             .join(", ");
         parts.push(format!(
-            "INSERT INTO {table_name} ({col_list}) SELECT {col_list} FROM {temp_name};"
+            "INSERT INTO {table_ident} ({col_list}) SELECT {col_list} FROM {temp_ident};"
         ));
     }
 
     // Step 4: Drop the renamed table
-    parts.push(format!("DROP TABLE {temp_name};"));
+    parts.push(format!("DROP TABLE {temp_ident};"));
 
     // Step 5: Recreate dependent indexes and triggers
     if let Some(deps) = dependents
@@ -423,9 +417,9 @@ fn format_migration(diff: &SchemaDiff) -> Option<String> {
 
     if !diff.modified.is_empty() {
         parts.push("-- MODIFIED OBJECTS".to_string());
-        for mt in &diff.modified {
-            parts.push(format!("-- Table: {}", mt.name));
-            parts.push(mt.migration_sql.clone());
+        for mo in &diff.modified {
+            parts.push(format!("-- {}: {}", mo.obj_type, mo.name));
+            parts.push(mo.migration_sql.clone());
             parts.push(String::new());
         }
     }
@@ -597,12 +591,12 @@ mod tests {
         let sql = &diff.modified[0].migration_sql;
         assert!(sql.contains("PRAGMA foreign_keys=OFF"));
         assert!(sql.contains("BEGIN TRANSACTION"));
-        assert!(sql.contains("ALTER TABLE users RENAME TO _stig_old_users"));
+        assert!(sql.contains("ALTER TABLE \"users\" RENAME TO \"_stig_old_users\""));
         assert!(sql.contains("CREATE TABLE users"));
-        assert!(sql.contains("INSERT INTO users"));
+        assert!(sql.contains("INSERT INTO \"users\""));
         assert!(sql.contains("SELECT"));
-        assert!(sql.contains("FROM _stig_old_users"));
-        assert!(sql.contains("DROP TABLE _stig_old_users"));
+        assert!(sql.contains("FROM \"_stig_old_users\""));
+        assert!(sql.contains("DROP TABLE \"_stig_old_users\""));
         assert!(sql.contains("COMMIT"));
         assert!(sql.contains("PRAGMA foreign_keys=ON"));
     }
