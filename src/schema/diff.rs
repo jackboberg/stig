@@ -11,7 +11,7 @@ use std::collections::HashMap;
 
 use anyhow::{Context, Result};
 use rusqlite::Connection;
-use sqlparser::ast::Statement;
+use sqlparser::ast::{ObjectName, Statement};
 use sqlparser::dialect::SQLiteDialect;
 use sqlparser::parser::Parser;
 
@@ -248,10 +248,24 @@ fn compute_diff(
         }
     }
 
-    // Sort for deterministic output
-    added.sort_by(|a, b| (&a.obj_type, &a.name).cmp(&(&b.obj_type, &b.name)));
-    removed.sort_by(|a, b| (&a.obj_type, &a.name).cmp(&(&b.obj_type, &b.name)));
-    modified.sort_by(|a, b| a.name.cmp(&b.name));
+    // Sort for deterministic output using dependency-safe type ordering:
+    // tables first (most other objects depend on them), then views, then
+    // indexes, then triggers.
+    added.sort_by(|a, b| {
+        type_priority(&a.obj_type)
+            .cmp(&type_priority(&b.obj_type))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    removed.sort_by(|a, b| {
+        type_priority(&a.obj_type)
+            .cmp(&type_priority(&b.obj_type))
+            .then_with(|| a.name.cmp(&b.name))
+    });
+    modified.sort_by(|a, b| {
+        type_priority(&a.obj_type)
+            .cmp(&type_priority(&b.obj_type))
+            .then_with(|| a.name.cmp(&b.name))
+    });
 
     Ok(SchemaDiff {
         added,
@@ -330,25 +344,10 @@ fn generate_table_recreation(
     parts.push("PRAGMA foreign_keys=OFF;".to_string());
     parts.push("BEGIN TRANSACTION;".to_string());
 
-    // Step 1: Create the new table under a temporary name
-    // Replace both quoted and unquoted table name references in the CREATE TABLE statement
-    let new_sql_renamed = new_sql
-        .replace(
-            &format!("CREATE TABLE {table_ident}"),
-            &format!("CREATE TABLE {temp_ident}"),
-        )
-        .replace(
-            &format!("CREATE TABLE {table_name} "),
-            &format!("CREATE TABLE {temp_name} "),
-        )
-        .replace(
-            &format!("CREATE TABLE {table_name}("),
-            &format!("CREATE TABLE {temp_name}("),
-        )
-        .replace(
-            &format!("CREATE TABLE {table_name}\n"),
-            &format!("CREATE TABLE {temp_name}\n"),
-        );
+    // Step 1: Create the new table under a temporary name.
+    // Parse the CREATE TABLE statement and rewrite the table name in the AST
+    // to ensure the temp table name is always used, regardless of quoting style.
+    let new_sql_renamed = rewrite_create_table_name(new_sql, &temp_name)?;
     parts.push(format!(
         "\n-- New table definition\n{}",
         ensure_semicolon(&new_sql_renamed)
@@ -390,6 +389,29 @@ fn generate_table_recreation(
     Ok(parts.join("\n"))
 }
 
+/// Rewrite a CREATE TABLE statement's table name to a new name.
+///
+/// Parses the statement with sqlparser and rewrites the table name in the AST,
+/// then re-renders to a string. This is safe regardless of quoting style,
+/// casing, or other SQL formatting variations.
+fn rewrite_create_table_name(sql: &str, new_name: &str) -> Result<String> {
+    let stmts =
+        Parser::parse_sql(&SQLiteDialect {}, sql).context("failed to parse CREATE TABLE")?;
+
+    let Statement::CreateTable(mut create) =
+        stmts.into_iter().next().context("expected CREATE TABLE")?
+    else {
+        anyhow::bail!("expected CREATE TABLE statement");
+    };
+
+    // Rewrite the table name using the new temp name
+    create.name = ObjectName(vec![sqlparser::ast::ObjectNamePart::Identifier(
+        sqlparser::ast::Ident::new(new_name.to_string()),
+    )]);
+
+    Ok(format!("{create}"))
+}
+
 /// Extract column definitions from a CREATE TABLE statement.
 fn extract_columns(sql: &str) -> Result<Vec<ColumnInfo>> {
     let stmts = Parser::parse_sql(&SQLiteDialect {}, sql)
@@ -424,6 +446,20 @@ fn ensure_semicolon(sql: &str) -> String {
         trimmed.to_string()
     } else {
         format!("{trimmed};")
+    }
+}
+
+/// Return a sort priority for schema object types.
+///
+/// Uses dependency-safe ordering: tables first (other objects depend on them),
+/// then views, then indexes, then triggers.
+fn type_priority(obj_type: &str) -> u8 {
+    match obj_type {
+        "table" => 1,
+        "view" => 2,
+        "index" => 3,
+        "trigger" => 4,
+        _ => 5,
     }
 }
 
