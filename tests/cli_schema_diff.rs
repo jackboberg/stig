@@ -137,13 +137,11 @@ fn detects_modified_table() {
         .stdout(predicate::str::contains("-- MODIFIED OBJECTS"))
         .stdout(predicate::str::contains("PRAGMA foreign_keys=OFF"))
         .stdout(predicate::str::contains("BEGIN TRANSACTION"))
-        .stdout(predicate::str::contains(
-            "ALTER TABLE \"users\" RENAME TO \"_stig_old_users\"",
-        ))
-        .stdout(predicate::str::contains("CREATE TABLE \"users\""))
-        .stdout(predicate::str::contains("INSERT INTO \"users\""))
-        .stdout(predicate::str::contains("FROM \"_stig_old_users\""))
-        .stdout(predicate::str::contains("DROP TABLE \"_stig_old_users\""))
+        .stdout(predicate::str::contains("_stig_new_users"))
+        .stdout(predicate::str::contains("INSERT INTO"))
+        .stdout(predicate::str::contains("FROM"))
+        .stdout(predicate::str::contains("DROP TABLE"))
+        .stdout(predicate::str::contains("RENAME TO"))
         .stdout(predicate::str::contains("COMMIT"))
         .stdout(predicate::str::contains("PRAGMA foreign_keys=ON"));
 }

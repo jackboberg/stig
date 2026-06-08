@@ -158,6 +158,9 @@ fn normalize_whitespace(s: &str) -> String {
 ///
 /// Propagates errors from table recreation generation so that failures are
 /// surfaced rather than silently dropped.
+///
+/// Excludes dependent indexes/triggers of modified tables from the top-level
+/// diff sections to avoid duplicate CREATE/DROP statements.
 fn compute_diff(
     current: &HashMap<SchemaKey, SchemaObject>,
     baseline: &HashMap<SchemaKey, SchemaObject>,
@@ -169,7 +172,37 @@ fn compute_diff(
     // Collect dependent objects for each table (indexes, triggers)
     let table_dependents = collect_table_dependents(current);
 
+    // First pass: identify which tables are modified so we can exclude their dependents
+    let mut modified_tables: Vec<String> = Vec::new();
     for (key, obj) in current {
+        if key.0 == "table"
+            && let Some(baseline_obj) = baseline.get(key)
+        {
+            let current_canonical = canonicalize_sql(&obj.sql);
+            let baseline_canonical = canonicalize_sql(&baseline_obj.sql);
+            if current_canonical != baseline_canonical {
+                modified_tables.push(key.1.clone());
+            }
+        }
+    }
+
+    // Build a set of dependent keys to exclude from top-level diff
+    let excluded_dependents: HashMap<SchemaKey, ()> = modified_tables
+        .iter()
+        .flat_map(|t| {
+            table_dependents.get(t).into_iter().flat_map(|deps| {
+                deps.iter()
+                    .map(|d| ((d.obj_type.clone(), d.name.clone()), ()))
+            })
+        })
+        .collect();
+
+    for (key, obj) in current {
+        // Skip dependents of modified tables — they'll be recreated as part of table rebuild
+        if excluded_dependents.contains_key(key) {
+            continue;
+        }
+
         if let Some(baseline_obj) = baseline.get(key) {
             let current_canonical = canonicalize_sql(&obj.sql);
             let baseline_canonical = canonicalize_sql(&baseline_obj.sql);
@@ -206,6 +239,10 @@ fn compute_diff(
     }
 
     for (key, obj) in baseline {
+        // Also exclude dependents of modified tables from removed
+        if excluded_dependents.contains_key(key) {
+            continue;
+        }
         if !current.contains_key(key) {
             removed.push(obj.clone());
         }
@@ -260,11 +297,12 @@ fn extract_referenced_table(sql: &str, obj_type: &str) -> Option<String> {
 /// Generate the SQL needed to recreate a table with a new definition while
 /// preserving data in columns that exist in both the old and new schemas.
 ///
-/// The generated SQL follows this pattern:
-/// 1. Rename the existing table aside
-/// 2. Run the new CREATE TABLE (creates table under original name)
-/// 3. Copy common columns from the renamed table
-/// 4. Drop the renamed table
+/// Uses the standard SQLite table-rebuild pattern to avoid corrupting
+/// dependent VIEW definitions (which would be rewritten by ALTER TABLE RENAME):
+/// 1. Create new table under a temporary name
+/// 2. Copy common columns from the old table
+/// 3. Drop the old table
+/// 4. Rename the new table to the original name
 /// 5. Recreate dependent indexes/triggers
 fn generate_table_recreation(
     old_sql: &str,
@@ -284,7 +322,7 @@ fn generate_table_recreation(
         .copied()
         .collect();
 
-    let temp_name = format!("_stig_old_{table_name}");
+    let temp_name = format!("_stig_new_{table_name}");
     let table_ident = quote_name(table_name);
     let temp_ident = quote_name(&temp_name);
 
@@ -292,16 +330,31 @@ fn generate_table_recreation(
     parts.push("PRAGMA foreign_keys=OFF;".to_string());
     parts.push("BEGIN TRANSACTION;".to_string());
 
-    // Step 1: Rename existing table aside
-    parts.push(format!("ALTER TABLE {table_ident} RENAME TO {temp_ident};"));
-
-    // Step 2: Create the new table (under the original name)
+    // Step 1: Create the new table under a temporary name
+    // Replace both quoted and unquoted table name references in the CREATE TABLE statement
+    let new_sql_renamed = new_sql
+        .replace(
+            &format!("CREATE TABLE {table_ident}"),
+            &format!("CREATE TABLE {temp_ident}"),
+        )
+        .replace(
+            &format!("CREATE TABLE {table_name} "),
+            &format!("CREATE TABLE {temp_name} "),
+        )
+        .replace(
+            &format!("CREATE TABLE {table_name}("),
+            &format!("CREATE TABLE {temp_name}("),
+        )
+        .replace(
+            &format!("CREATE TABLE {table_name}\n"),
+            &format!("CREATE TABLE {temp_name}\n"),
+        );
     parts.push(format!(
         "\n-- New table definition\n{}",
-        ensure_semicolon(new_sql)
+        ensure_semicolon(&new_sql_renamed)
     ));
 
-    // Step 3: Copy data from the renamed table
+    // Step 2: Copy data from the old table
     if !common.is_empty() {
         let col_list = common
             .iter()
@@ -309,12 +362,15 @@ fn generate_table_recreation(
             .collect::<Vec<_>>()
             .join(", ");
         parts.push(format!(
-            "INSERT INTO {table_ident} ({col_list}) SELECT {col_list} FROM {temp_ident};"
+            "INSERT INTO {temp_ident} ({col_list}) SELECT {col_list} FROM {table_ident};"
         ));
     }
 
-    // Step 4: Drop the renamed table
-    parts.push(format!("DROP TABLE {temp_ident};"));
+    // Step 3: Drop the old table
+    parts.push(format!("DROP TABLE {table_ident};"));
+
+    // Step 4: Rename the new table to the original name
+    parts.push(format!("ALTER TABLE {temp_ident} RENAME TO {table_ident};"));
 
     // Step 5: Recreate dependent indexes and triggers
     if let Some(deps) = dependents
@@ -591,12 +647,12 @@ mod tests {
         let sql = &diff.modified[0].migration_sql;
         assert!(sql.contains("PRAGMA foreign_keys=OFF"));
         assert!(sql.contains("BEGIN TRANSACTION"));
-        assert!(sql.contains("ALTER TABLE \"users\" RENAME TO \"_stig_old_users\""));
-        assert!(sql.contains("CREATE TABLE users"));
-        assert!(sql.contains("INSERT INTO \"users\""));
+        assert!(sql.contains("CREATE TABLE _stig_new_users"));
+        assert!(sql.contains("INSERT INTO \"_stig_new_users\""));
         assert!(sql.contains("SELECT"));
-        assert!(sql.contains("FROM \"_stig_old_users\""));
-        assert!(sql.contains("DROP TABLE \"_stig_old_users\""));
+        assert!(sql.contains("FROM \"users\""));
+        assert!(sql.contains("DROP TABLE \"users\""));
+        assert!(sql.contains("ALTER TABLE \"_stig_new_users\" RENAME TO \"users\""));
         assert!(sql.contains("COMMIT"));
         assert!(sql.contains("PRAGMA foreign_keys=ON"));
     }

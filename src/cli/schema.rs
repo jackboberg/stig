@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use anyhow::Context;
 
 use crate::cli::SchemaCommand;
@@ -39,7 +37,7 @@ pub fn run(command: SchemaCommand) -> anyhow::Result<()> {
     match migration_sql {
         Some(sql) => {
             if let Some(output_path) = &output {
-                let path = PathBuf::from(output_path);
+                let path = config.resolve_path(output_path);
                 if let Some(parent) = path.parent() {
                     std::fs::create_dir_all(parent).with_context(|| {
                         format!("failed to create directory: {}", parent.display())
