@@ -247,6 +247,35 @@ fn output_flag_writes_to_file() {
     assert!(migration_path.exists());
     let content = std::fs::read_to_string(&migration_path).unwrap();
     assert!(content.contains("CREATE TABLE posts"));
+
+    // Verify the generated migration is valid SQL by applying it to a fresh
+    // in-memory database (the diff migration takes a baseline DB to the current state)
+    let fresh_conn = Connection::open_in_memory().unwrap();
+    // Apply the baseline migration first
+    fresh_conn
+        .execute_batch("CREATE TABLE users (id INTEGER PRIMARY KEY);")
+        .unwrap();
+    fresh_conn
+        .execute_batch(
+            "CREATE TABLE schema_migrations (version TEXT NOT NULL PRIMARY KEY, checksum TEXT NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')));",
+        )
+        .unwrap();
+    // Now apply the diff migration (strip the directive and comments)
+    let diff_sql = content
+        .lines()
+        .filter(|l| !l.starts_with("stig: non-transactional"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    fresh_conn.execute_batch(&diff_sql).unwrap();
+    // Verify the posts table was created
+    let count: i64 = fresh_conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='posts'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 1, "diff migration should create the posts table");
 }
 
 #[test]

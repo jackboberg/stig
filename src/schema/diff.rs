@@ -15,6 +15,7 @@ use sqlparser::ast::{ObjectName, Statement};
 use sqlparser::dialect::SQLiteDialect;
 use sqlparser::parser::Parser;
 
+use crate::migrate::apply::{has_non_transactional_directive, strip_directive};
 use crate::migrate::discover::MigrationFile;
 
 // ---------------------------------------------------------------------------
@@ -99,14 +100,28 @@ fn dump_schema(conn: &Connection) -> Result<HashMap<SchemaKey, SchemaObject>> {
 // ---------------------------------------------------------------------------
 
 /// Build the baseline schema by applying all migrations to an in-memory database.
+///
+/// Mirrors the apply logic in `stig migrate`: strips `stig: non-transactional`
+/// directives, wraps transactional migrations in `BEGIN/COMMIT`, and executes
+/// non-transactional ones as-is after stripping.
 fn build_baseline(files: &[MigrationFile]) -> Result<HashMap<SchemaKey, SchemaObject>> {
     let conn = Connection::open_in_memory().context("failed to open in-memory database")?;
 
     for file in files {
         let content = std::fs::read_to_string(&file.path)
             .with_context(|| format!("failed to read migration file: {}", file.path.display()))?;
-        conn.execute_batch(&content)
-            .with_context(|| format!("failed to apply migration: {}", file.path.display()))?;
+
+        let is_non_tx = has_non_transactional_directive(&content);
+
+        if is_non_tx {
+            let sql = strip_directive(&content);
+            conn.execute_batch(&sql)
+                .with_context(|| format!("failed to apply migration: {}", file.path.display()))?;
+        } else {
+            let sql = format!("BEGIN TRANSACTION;\n{content}\nCOMMIT;");
+            conn.execute_batch(&sql)
+                .with_context(|| format!("failed to apply migration: {}", file.path.display()))?;
+        }
     }
 
     dump_schema(&conn)
@@ -169,8 +184,9 @@ fn compute_diff(
     let mut removed = Vec::new();
     let mut modified = Vec::new();
 
-    // Collect dependent objects for each table (indexes, triggers)
+    // Collect dependent objects for each table (indexes, triggers) from both schemas
     let table_dependents = collect_table_dependents(current);
+    let baseline_table_dependents = collect_table_dependents(baseline);
 
     // First pass: identify which tables are modified so we can exclude their dependents
     let mut modified_tables: Vec<String> = Vec::new();
@@ -186,14 +202,28 @@ fn compute_diff(
         }
     }
 
-    // Build a set of dependent keys to exclude from top-level diff
+    // Build a set of dependent keys to exclude from top-level diff.
+    // Include dependents from both current and baseline schemas so that
+    // baseline-only dependents of modified tables are also excluded.
     let excluded_dependents: HashMap<SchemaKey, ()> = modified_tables
         .iter()
         .flat_map(|t| {
-            table_dependents.get(t).into_iter().flat_map(|deps| {
-                deps.iter()
-                    .map(|d| ((d.obj_type.clone(), d.name.clone()), ()))
-            })
+            table_dependents
+                .get(t)
+                .into_iter()
+                .flat_map(|deps| {
+                    deps.iter()
+                        .map(|d| ((d.obj_type.clone(), d.name.clone()), ()))
+                })
+                .chain(
+                    baseline_table_dependents
+                        .get(t)
+                        .into_iter()
+                        .flat_map(|deps| {
+                            deps.iter()
+                                .map(|d| ((d.obj_type.clone(), d.name.clone()), ()))
+                        }),
+                )
         })
         .collect();
 
@@ -528,6 +558,10 @@ fn quote_name(name: &str) -> String {
 // ---------------------------------------------------------------------------
 
 /// Format the diff into a migration SQL string.
+///
+/// Emits the `stig: non-transactional` directive because the table recreation
+/// SQL contains its own `BEGIN/COMMIT` — `stig migrate` must not wrap it in
+/// another transaction.
 fn format_migration(diff: &SchemaDiff) -> Option<String> {
     if diff.added.is_empty() && diff.removed.is_empty() && diff.modified.is_empty() {
         return None;
@@ -537,6 +571,7 @@ fn format_migration(diff: &SchemaDiff) -> Option<String> {
     let mut parts = vec![
         "-- stig schema diff migration".to_string(),
         format!("-- Generated: {timestamp}"),
+        "stig: non-transactional".to_string(),
         String::new(),
     ];
 
