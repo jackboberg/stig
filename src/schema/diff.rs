@@ -559,21 +559,26 @@ fn quote_name(name: &str) -> String {
 
 /// Format the diff into a migration SQL string.
 ///
-/// Emits the `stig: non-transactional` directive because the table recreation
-/// SQL contains its own `BEGIN/COMMIT` — `stig migrate` must not wrap it in
-/// another transaction.
+/// Emits the `stig: non-transactional` directive only when the diff contains
+/// modified tables, since those use embedded `BEGIN/COMMIT` for table
+/// recreation — `stig migrate` must not wrap them in another transaction.
 fn format_migration(diff: &SchemaDiff) -> Option<String> {
     if diff.added.is_empty() && diff.removed.is_empty() && diff.modified.is_empty() {
         return None;
     }
 
     let timestamp = chrono::Utc::now().format("%Y%m%d%H%M%S");
+    let has_table_rebuild = diff.modified.iter().any(|mo| mo.obj_type == "table");
+
     let mut parts = vec![
         "-- stig schema diff migration".to_string(),
         format!("-- Generated: {timestamp}"),
-        "stig: non-transactional".to_string(),
-        String::new(),
     ];
+
+    if has_table_rebuild {
+        parts.push("stig: non-transactional".to_string());
+    }
+    parts.push(String::new());
 
     if !diff.added.is_empty() {
         parts.push("-- NEW OBJECTS".to_string());
