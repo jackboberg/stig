@@ -329,18 +329,18 @@ fn collect_table_dependents(
 /// SQLite syntax), falls back to a regex heuristic to extract the table name
 /// so dependents aren't silently lost.
 fn extract_referenced_table(sql: &str, obj_type: &str) -> Option<String> {
-    // Try parsing with sqlparser first
+    // Try parsing with sqlparser first — extract identifier values directly
+    // to avoid quote-style mismatches with sqlite_master.name
     if let Ok(stmts) = Parser::parse_sql(&SQLiteDialect {}, sql)
         && let Some(stmt) = stmts.first()
     {
         let table_name = match (obj_type, stmt) {
-            ("index", Statement::CreateIndex(ci)) => Some(ci.table_name.to_string()),
-            ("trigger", Statement::CreateTrigger(ct)) => Some(ct.table_name.to_string()),
+            ("index", Statement::CreateIndex(ci)) => extract_first_ident_value(&ci.table_name),
+            ("trigger", Statement::CreateTrigger(ct)) => extract_first_ident_value(&ct.table_name),
             _ => None,
         };
         if let Some(name) = table_name {
-            // Strip quotes from the name so it matches sqlite_master.name
-            return Some(strip_quotes(&name));
+            return Some(name);
         }
     }
 
@@ -379,9 +379,12 @@ fn extract_referenced_table(sql: &str, obj_type: &str) -> Option<String> {
     None
 }
 
-/// Strip surrounding double quotes from an identifier.
-fn strip_quotes(s: &str) -> String {
-    s.trim_matches('"').to_string()
+/// Extract the unquoted value from the first identifier part of an ObjectName.
+fn extract_first_ident_value(name: &ObjectName) -> Option<String> {
+    name.0.iter().find_map(|part| match part {
+        sqlparser::ast::ObjectNamePart::Identifier(ident) => Some(ident.value.clone()),
+        _ => None,
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -393,11 +396,12 @@ fn strip_quotes(s: &str) -> String {
 ///
 /// Uses the standard SQLite table-rebuild pattern to avoid corrupting
 /// dependent VIEW definitions (which would be rewritten by ALTER TABLE RENAME):
-/// 1. Create new table under a temporary name
-/// 2. Copy common columns from the old table
-/// 3. Drop the old table
-/// 4. Rename the new table to the original name
-/// 5. Recreate dependent indexes/triggers
+/// 1. Drop any leftover temp table (for idempotency)
+/// 2. Create new table under a temporary name
+/// 3. Copy common columns from the old table
+/// 4. Drop the old table
+/// 5. Rename the new table to the original name
+/// 6. Recreate dependent indexes/triggers
 fn generate_table_recreation(
     old_sql: &str,
     new_sql: &str,
@@ -424,7 +428,10 @@ fn generate_table_recreation(
     parts.push("PRAGMA foreign_keys=OFF;".to_string());
     parts.push("BEGIN TRANSACTION;".to_string());
 
-    // Step 1: Create the new table under a temporary name.
+    // Step 1: Drop any leftover temp table from a previous partial run
+    parts.push(format!("DROP TABLE IF EXISTS {temp_ident};"));
+
+    // Step 2: Create the new table under a temporary name.
     // Parse the CREATE TABLE statement and rewrite the table name in the AST
     // to ensure the temp table name is always used, regardless of quoting style.
     let new_sql_renamed = rewrite_create_table_name(new_sql, &temp_name)?;
@@ -433,7 +440,7 @@ fn generate_table_recreation(
         ensure_semicolon(&new_sql_renamed)
     ));
 
-    // Step 2: Copy data from the old table
+    // Step 3: Copy data from the old table
     if !common.is_empty() {
         let col_list = common
             .iter()
@@ -445,13 +452,13 @@ fn generate_table_recreation(
         ));
     }
 
-    // Step 3: Drop the old table
+    // Step 4: Drop the old table
     parts.push(format!("DROP TABLE {table_ident};"));
 
-    // Step 4: Rename the new table to the original name
+    // Step 5: Rename the new table to the original name
     parts.push(format!("ALTER TABLE {temp_ident} RENAME TO {table_ident};"));
 
-    // Step 5: Recreate dependent indexes and triggers
+    // Step 6: Recreate dependent indexes and triggers
     if let Some(deps) = dependents
         && !deps.is_empty()
     {
@@ -510,7 +517,7 @@ fn extract_columns(sql: &str) -> Result<Vec<ColumnInfo>> {
         .columns
         .iter()
         .map(|col| ColumnInfo {
-            name: col.name.to_string(),
+            name: col.name.value.clone(),
         })
         .collect())
 }
