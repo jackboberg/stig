@@ -142,8 +142,7 @@ fn detects_modified_table() {
         .stdout(predicate::str::contains("FROM"))
         .stdout(predicate::str::contains("DROP TABLE"))
         .stdout(predicate::str::contains("RENAME TO"))
-        .stdout(predicate::str::contains("RELEASE sp"))
-        .stdout(predicate::str::contains("PRAGMA foreign_keys=ON"));
+        .stdout(predicate::str::contains("RELEASE sp"));
 }
 
 #[test]

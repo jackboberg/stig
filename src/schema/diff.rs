@@ -15,6 +15,7 @@ use sqlparser::ast::{ObjectName, Statement};
 use sqlparser::dialect::SQLiteDialect;
 use sqlparser::parser::Parser;
 
+use crate::db::ensure_schema_migrations;
 use crate::migrate::apply::{has_non_transactional_directive, strip_directive};
 use crate::migrate::discover::MigrationFile;
 
@@ -106,6 +107,8 @@ fn dump_schema(conn: &Connection) -> Result<HashMap<SchemaKey, SchemaObject>> {
 /// non-transactional ones as-is after stripping.
 fn build_baseline(files: &[MigrationFile]) -> Result<HashMap<SchemaKey, SchemaObject>> {
     let conn = Connection::open_in_memory().context("failed to open in-memory database")?;
+
+    ensure_schema_migrations(&conn)?;
 
     for file in files {
         let content = std::fs::read_to_string(&file.path)
@@ -414,13 +417,14 @@ fn generate_table_recreation(
     let old_cols = extract_columns(old_sql)?;
     let new_cols = extract_columns(new_sql)?;
 
-    let old_names: Vec<&str> = old_cols.iter().map(|c| c.name.as_str()).collect();
-    let new_names: Vec<&str> = new_cols.iter().map(|c| c.name.as_str()).collect();
+    // SQLite treats identifiers case-insensitively, so normalize to lowercase
+    // for comparison while preserving original names for the SQL output.
+    let new_lower: Vec<String> = new_cols.iter().map(|c| c.name.to_lowercase()).collect();
 
-    let common: Vec<&str> = old_names
+    let common: Vec<&str> = old_cols
         .iter()
-        .filter(|c| new_names.contains(c))
-        .copied()
+        .filter(|c| new_lower.contains(&c.name.to_lowercase()))
+        .map(|c| c.name.as_str())
         .collect();
 
     let temp_name = format!("_stig_new_{table_name}");
@@ -474,7 +478,6 @@ fn generate_table_recreation(
     }
 
     parts.push("RELEASE sp;".to_string());
-    parts.push("PRAGMA foreign_keys=ON;".to_string());
 
     Ok(parts.join("\n"))
 }
@@ -794,7 +797,6 @@ mod tests {
         assert!(sql.contains("DROP TABLE \"users\""));
         assert!(sql.contains("ALTER TABLE \"_stig_new_users\" RENAME TO \"users\""));
         assert!(sql.contains("RELEASE sp"));
-        assert!(sql.contains("PRAGMA foreign_keys=ON"));
     }
 
     #[test]
