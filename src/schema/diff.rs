@@ -335,8 +335,8 @@ fn extract_referenced_table(sql: &str, obj_type: &str) -> Option<String> {
         && let Some(stmt) = stmts.first()
     {
         let table_name = match (obj_type, stmt) {
-            ("index", Statement::CreateIndex(ci)) => extract_first_ident_value(&ci.table_name),
-            ("trigger", Statement::CreateTrigger(ct)) => extract_first_ident_value(&ct.table_name),
+            ("index", Statement::CreateIndex(ci)) => extract_last_ident_value(&ci.table_name),
+            ("trigger", Statement::CreateTrigger(ct)) => extract_last_ident_value(&ct.table_name),
             _ => None,
         };
         if let Some(name) = table_name {
@@ -379,9 +379,12 @@ fn extract_referenced_table(sql: &str, obj_type: &str) -> Option<String> {
     None
 }
 
-/// Extract the unquoted value from the first identifier part of an ObjectName.
-fn extract_first_ident_value(name: &ObjectName) -> Option<String> {
-    name.0.iter().find_map(|part| match part {
+/// Extract the unquoted value from the last identifier part of an ObjectName.
+///
+/// Uses the *last* part so that schema-qualified names like `main.users`
+/// resolve to `users`, matching how `sqlite_master` stores object names.
+fn extract_last_ident_value(name: &ObjectName) -> Option<String> {
+    name.0.iter().rev().find_map(|part| match part {
         sqlparser::ast::ObjectNamePart::Identifier(ident) => Some(ident.value.clone()),
         _ => None,
     })
@@ -426,7 +429,7 @@ fn generate_table_recreation(
 
     let mut parts = Vec::new();
     parts.push("PRAGMA foreign_keys=OFF;".to_string());
-    parts.push("BEGIN TRANSACTION;".to_string());
+    parts.push("SAVEPOINT sp;".to_string());
 
     // Step 1: Drop any leftover temp table from a previous partial run
     parts.push(format!("DROP TABLE IF EXISTS {temp_ident};"));
@@ -470,7 +473,7 @@ fn generate_table_recreation(
         }
     }
 
-    parts.push("COMMIT;".to_string());
+    parts.push("RELEASE sp;".to_string());
     parts.push("PRAGMA foreign_keys=ON;".to_string());
 
     Ok(parts.join("\n"))
@@ -567,7 +570,7 @@ fn quote_name(name: &str) -> String {
 /// Format the diff into a migration SQL string.
 ///
 /// Emits the `stig: non-transactional` directive only when the diff contains
-/// modified tables, since those use embedded `BEGIN/COMMIT` for table
+/// modified tables, since those use embedded `SAVEPOINT/RELEASE` for table
 /// recreation — `stig migrate` must not wrap them in another transaction.
 fn format_migration(diff: &SchemaDiff) -> Option<String> {
     if diff.added.is_empty() && diff.removed.is_empty() && diff.modified.is_empty() {
@@ -783,14 +786,14 @@ mod tests {
         assert_eq!(diff.modified[0].name, "users");
         let sql = &diff.modified[0].migration_sql;
         assert!(sql.contains("PRAGMA foreign_keys=OFF"));
-        assert!(sql.contains("BEGIN TRANSACTION"));
+        assert!(sql.contains("SAVEPOINT sp"));
         assert!(sql.contains("CREATE TABLE \"_stig_new_users\""));
         assert!(sql.contains("INSERT INTO \"_stig_new_users\""));
         assert!(sql.contains("SELECT"));
         assert!(sql.contains("FROM \"users\""));
         assert!(sql.contains("DROP TABLE \"users\""));
         assert!(sql.contains("ALTER TABLE \"_stig_new_users\" RENAME TO \"users\""));
-        assert!(sql.contains("COMMIT"));
+        assert!(sql.contains("RELEASE sp"));
         assert!(sql.contains("PRAGMA foreign_keys=ON"));
     }
 
