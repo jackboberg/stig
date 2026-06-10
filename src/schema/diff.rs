@@ -478,6 +478,9 @@ fn generate_table_recreation(
     }
 
     parts.push("RELEASE sp;".to_string());
+    // Restore foreign_keys to the project default (ON) so subsequent migrations
+    // on the same connection are not affected by the temporary disable.
+    parts.push("PRAGMA foreign_keys=ON;".to_string());
 
     Ok(parts.join("\n"))
 }
@@ -797,6 +800,7 @@ mod tests {
         assert!(sql.contains("DROP TABLE \"users\""));
         assert!(sql.contains("ALTER TABLE \"_stig_new_users\" RENAME TO \"users\""));
         assert!(sql.contains("RELEASE sp"));
+        assert!(sql.contains("PRAGMA foreign_keys=ON"));
     }
 
     #[test]
