@@ -31,7 +31,7 @@ pub fn run(command: SchemaCommand) -> anyhow::Result<()> {
 
     let files = discover(&migrations_dir).context("failed to discover migration files")?;
 
-    let migration_sql = diff::generate_migration(db.connection(), &files)
+    let migration_sql = diff::generate_migration(db.connection(), &files, &config.pragmas)
         .context("failed to generate schema diff")?;
 
     match migration_sql {

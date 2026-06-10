@@ -15,6 +15,7 @@ use sqlparser::ast::{ObjectName, Statement};
 use sqlparser::dialect::SQLiteDialect;
 use sqlparser::parser::Parser;
 
+use crate::config::Pragmas;
 use crate::db::ensure_schema_migrations;
 use crate::migrate::apply::{has_non_transactional_directive, strip_directive};
 use crate::migrate::discover::MigrationFile;
@@ -104,11 +105,17 @@ fn dump_schema(conn: &Connection) -> Result<HashMap<SchemaKey, SchemaObject>> {
 ///
 /// Mirrors the apply logic in `stig migrate`: strips `stig: non-transactional`
 /// directives, wraps transactional migrations in `BEGIN/COMMIT`, and executes
-/// non-transactional ones as-is after stripping.
-fn build_baseline(files: &[MigrationFile]) -> Result<HashMap<SchemaKey, SchemaObject>> {
+/// non-transactional ones as-is after stripping. Applies the same PRAGMAs
+/// (notably `foreign_keys`) that `Db::open` applies to the live connection.
+fn build_baseline(
+    files: &[MigrationFile],
+    pragmas: &Pragmas,
+) -> Result<HashMap<SchemaKey, SchemaObject>> {
     let conn = Connection::open_in_memory().context("failed to open in-memory database")?;
 
     ensure_schema_migrations(&conn)?;
+
+    conn.execute_batch(&format!("PRAGMA foreign_keys={};", pragmas.foreign_keys))?;
 
     for file in files {
         let content = std::fs::read_to_string(&file.path)
@@ -182,6 +189,7 @@ fn normalize_whitespace(s: &str) -> String {
 fn compute_diff(
     current: &HashMap<SchemaKey, SchemaObject>,
     baseline: &HashMap<SchemaKey, SchemaObject>,
+    foreign_keys: &str,
 ) -> Result<SchemaDiff> {
     let mut added = Vec::new();
     let mut removed = Vec::new();
@@ -246,6 +254,7 @@ fn compute_diff(
                         &obj.sql,
                         &obj.name,
                         table_dependents.get(&obj.name).map(|v| v.as_slice()),
+                        foreign_keys,
                     )?;
                     modified.push(ModifiedObject {
                         obj_type: key.0.clone(),
@@ -347,7 +356,7 @@ fn extract_referenced_table(sql: &str, obj_type: &str) -> Option<String> {
         }
     }
 
-    // Fallback: regex heuristic for common patterns
+    // Fallback: string-based heuristic for common patterns
     let upper = sql.to_uppercase();
     match obj_type {
         "index" => {
@@ -413,6 +422,7 @@ fn generate_table_recreation(
     new_sql: &str,
     table_name: &str,
     dependents: Option<&[SchemaObject]>,
+    foreign_keys: &str,
 ) -> Result<String> {
     let old_cols = extract_columns(old_sql)?;
     let new_cols = extract_columns(new_sql)?;
@@ -478,9 +488,9 @@ fn generate_table_recreation(
     }
 
     parts.push("RELEASE sp;".to_string());
-    // Restore foreign_keys to the project default (ON) so subsequent migrations
-    // on the same connection are not affected by the temporary disable.
-    parts.push("PRAGMA foreign_keys=ON;".to_string());
+    // Restore foreign_keys to the configured project value so subsequent
+    // migrations on the same connection are not affected by the temporary disable.
+    parts.push(format!("PRAGMA foreign_keys={};", foreign_keys));
 
     Ok(parts.join("\n"))
 }
@@ -637,11 +647,15 @@ fn format_migration(diff: &SchemaDiff) -> Option<String> {
 /// database schema and the migration baseline.
 ///
 /// Returns `None` if the schemas are identical.
-pub fn generate_migration(conn: &Connection, files: &[MigrationFile]) -> Result<Option<String>> {
+pub fn generate_migration(
+    conn: &Connection,
+    files: &[MigrationFile],
+    pragmas: &Pragmas,
+) -> Result<Option<String>> {
     let current = dump_schema(conn).context("failed to dump current schema")?;
-    let baseline = build_baseline(files).context("failed to build baseline schema")?;
+    let baseline = build_baseline(files, pragmas).context("failed to build baseline schema")?;
 
-    let diff = compute_diff(&current, &baseline)?;
+    let diff = compute_diff(&current, &baseline, &pragmas.foreign_keys)?;
     Ok(format_migration(&diff))
 }
 
@@ -706,7 +720,7 @@ mod tests {
             ),
         ];
 
-        let baseline = build_baseline(&files).unwrap();
+        let baseline = build_baseline(&files, &Pragmas::default()).unwrap();
         assert!(baseline.contains_key(&("table".to_string(), "users".to_string())));
         assert!(baseline.contains_key(&("table".to_string(), "posts".to_string())));
     }
@@ -714,12 +728,15 @@ mod tests {
     #[test]
     fn compute_diff_detects_added_table() {
         let dir = TempDir::new().unwrap();
-        let baseline = build_baseline(&[write_migration_file(
-            &dir,
-            "20240101000000",
-            "create_users",
-            "CREATE TABLE users (id INTEGER PRIMARY KEY);",
-        )])
+        let baseline = build_baseline(
+            &[write_migration_file(
+                &dir,
+                "20240101000000",
+                "create_users",
+                "CREATE TABLE users (id INTEGER PRIMARY KEY);",
+            )],
+            &Pragmas::default(),
+        )
         .unwrap();
 
         let current_conn = Connection::open_in_memory().unwrap();
@@ -731,7 +748,7 @@ mod tests {
             .unwrap();
         let current = dump_schema(&current_conn).unwrap();
 
-        let diff = compute_diff(&current, &baseline).unwrap();
+        let diff = compute_diff(&current, &baseline, &Pragmas::default().foreign_keys).unwrap();
         assert_eq!(diff.added.len(), 1);
         assert_eq!(diff.added[0].name, "posts");
         assert!(diff.removed.is_empty());
@@ -741,20 +758,23 @@ mod tests {
     #[test]
     fn compute_diff_detects_removed_table() {
         let dir = TempDir::new().unwrap();
-        let baseline = build_baseline(&[
-            write_migration_file(
-                &dir,
-                "20240101000000",
-                "create_users",
-                "CREATE TABLE users (id INTEGER PRIMARY KEY);",
-            ),
-            write_migration_file(
-                &dir,
-                "20240102000000",
-                "create_posts",
-                "CREATE TABLE posts (id INTEGER PRIMARY KEY);",
-            ),
-        ])
+        let baseline = build_baseline(
+            &[
+                write_migration_file(
+                    &dir,
+                    "20240101000000",
+                    "create_users",
+                    "CREATE TABLE users (id INTEGER PRIMARY KEY);",
+                ),
+                write_migration_file(
+                    &dir,
+                    "20240102000000",
+                    "create_posts",
+                    "CREATE TABLE posts (id INTEGER PRIMARY KEY);",
+                ),
+            ],
+            &Pragmas::default(),
+        )
         .unwrap();
 
         let current_conn = Connection::open_in_memory().unwrap();
@@ -763,7 +783,7 @@ mod tests {
             .unwrap();
         let current = dump_schema(&current_conn).unwrap();
 
-        let diff = compute_diff(&current, &baseline).unwrap();
+        let diff = compute_diff(&current, &baseline, &Pragmas::default().foreign_keys).unwrap();
         assert_eq!(diff.removed.len(), 1);
         assert_eq!(diff.removed[0].name, "posts");
         assert!(diff.added.is_empty());
@@ -773,12 +793,15 @@ mod tests {
     #[test]
     fn compute_diff_detects_modified_table() {
         let dir = TempDir::new().unwrap();
-        let baseline = build_baseline(&[write_migration_file(
-            &dir,
-            "20240101000000",
-            "create_users",
-            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);",
-        )])
+        let baseline = build_baseline(
+            &[write_migration_file(
+                &dir,
+                "20240101000000",
+                "create_users",
+                "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);",
+            )],
+            &Pragmas::default(),
+        )
         .unwrap();
 
         let current_conn = Connection::open_in_memory().unwrap();
@@ -787,7 +810,7 @@ mod tests {
             .unwrap();
         let current = dump_schema(&current_conn).unwrap();
 
-        let diff = compute_diff(&current, &baseline).unwrap();
+        let diff = compute_diff(&current, &baseline, &Pragmas::default().foreign_keys).unwrap();
         assert_eq!(diff.modified.len(), 1);
         assert_eq!(diff.modified[0].name, "users");
         let sql = &diff.modified[0].migration_sql;
@@ -806,12 +829,15 @@ mod tests {
     #[test]
     fn compute_diff_empty_when_identical() {
         let dir = TempDir::new().unwrap();
-        let baseline = build_baseline(&[write_migration_file(
-            &dir,
-            "20240101000000",
-            "create_users",
-            "CREATE TABLE users (id INTEGER PRIMARY KEY);",
-        )])
+        let baseline = build_baseline(
+            &[write_migration_file(
+                &dir,
+                "20240101000000",
+                "create_users",
+                "CREATE TABLE users (id INTEGER PRIMARY KEY);",
+            )],
+            &Pragmas::default(),
+        )
         .unwrap();
 
         let current_conn = Connection::open_in_memory().unwrap();
@@ -820,7 +846,7 @@ mod tests {
             .unwrap();
         let current = dump_schema(&current_conn).unwrap();
 
-        let diff = compute_diff(&current, &baseline).unwrap();
+        let diff = compute_diff(&current, &baseline, &Pragmas::default().foreign_keys).unwrap();
         assert!(diff.added.is_empty());
         assert!(diff.removed.is_empty());
         assert!(diff.modified.is_empty());
@@ -829,12 +855,15 @@ mod tests {
     #[test]
     fn compute_diff_ignores_whitespace_differences() {
         let dir = TempDir::new().unwrap();
-        let baseline = build_baseline(&[write_migration_file(
-            &dir,
-            "20240101000000",
-            "create_users",
-            "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);",
-        )])
+        let baseline = build_baseline(
+            &[write_migration_file(
+                &dir,
+                "20240101000000",
+                "create_users",
+                "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);",
+            )],
+            &Pragmas::default(),
+        )
         .unwrap();
 
         // Same table with different whitespace
@@ -849,7 +878,7 @@ mod tests {
             .unwrap();
         let current = dump_schema(&current_conn).unwrap();
 
-        let diff = compute_diff(&current, &baseline).unwrap();
+        let diff = compute_diff(&current, &baseline, &Pragmas::default().foreign_keys).unwrap();
         assert!(
             diff.modified.is_empty(),
             "whitespace-only differences should not trigger a modification"
@@ -912,7 +941,7 @@ mod tests {
         conn.execute_batch("CREATE TABLE users (id INTEGER PRIMARY KEY);")
             .unwrap();
 
-        let result = generate_migration(&conn, &files).unwrap();
+        let result = generate_migration(&conn, &files, &Pragmas::default()).unwrap();
         assert!(result.is_none());
     }
 
