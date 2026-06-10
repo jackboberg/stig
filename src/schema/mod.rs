@@ -4,6 +4,8 @@
 //! of applying all migrations to a fresh database. It enables fast bootstrap
 //! of fresh databases without replaying every migration individually.
 
+pub mod diff;
+
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
