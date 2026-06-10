@@ -292,13 +292,7 @@ fn detect_rowid_alias(columns: &[ColumnInfo], without_rowid: bool) -> Option<Str
 // ---------------------------------------------------------------------------
 
 fn is_excluded(name: &str, exclude: &[String]) -> bool {
-    // Internal exclusions per SPEC §7.5: always exclude sqlite_ system
-    // tables and the schema_migrations tracking table.
-    const INTERNAL_EXCLUDE: &[&str] = &["sqlite_%", "schema_migrations"];
-    INTERNAL_EXCLUDE
-        .iter()
-        .any(|pattern| like_match(pattern, name))
-        || exclude.iter().any(|pattern| like_match(pattern, name))
+    exclude.iter().any(|pattern| like_match(pattern, name))
 }
 
 /// SQL `LIKE`-style matching with `%` (any sequence) and `_` (single char).

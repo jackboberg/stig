@@ -9,6 +9,17 @@ use crate::config::GenerateTarget;
 use crate::errors::CliError;
 
 // ---------------------------------------------------------------------------
+// Internal exclusions
+// ---------------------------------------------------------------------------
+
+/// Table-name patterns that are always excluded from codegen output.
+///
+/// These are merged into every target's `exclude` list at dispatch time so
+/// that all targets (current and future) automatically skip internal SQLite
+/// tables and the schema_migrations tracking table.
+const INTERNAL_EXCLUDE: &[&str] = &["sqlite_%", "schema_migrations"];
+
+// ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
 
@@ -155,9 +166,16 @@ pub fn run_targets(
             }
         };
 
+        let mut exclude: Vec<String> = INTERNAL_EXCLUDE.iter().map(|s| s.to_string()).collect();
+        for pattern in &entry.exclude {
+            if !exclude.contains(pattern) {
+                exclude.push(pattern.clone());
+            }
+        }
+
         let config = CodegenConfig {
             path: project_root.join(&entry.path),
-            exclude: entry.exclude.clone(),
+            exclude,
             format: entry.format.clone(),
             extra: entry.extra.clone(),
         };

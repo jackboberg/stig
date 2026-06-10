@@ -16,7 +16,7 @@ fn ts_target(path: &str) -> GenerateTarget {
         path: path.to_string(),
         name: None,
         format: None,
-        exclude: vec!["sqlite_%".to_string(), "schema_migrations".to_string()],
+        exclude: vec![],
         extra: toml::Table::new(),
     }
 }
@@ -167,11 +167,7 @@ fn exclude_glob_pattern() {
     let path = dir.path().join("types.ts");
 
     let mut target = ts_target(path.to_str().unwrap());
-    target.exclude = vec![
-        "sqlite_%".to_string(),
-        "schema_migrations".to_string(),
-        "excluded_%".to_string(),
-    ];
+    target.exclude = vec!["excluded_%".to_string()];
 
     let outputs = codegen::run_targets(&conn, &[target], dir.path(), None).unwrap();
     let output = std::fs::read_to_string(&outputs[0].path).unwrap();
