@@ -101,6 +101,20 @@ fn dump_schema(conn: &Connection) -> Result<HashMap<SchemaKey, SchemaObject>> {
 // Baseline construction
 // ---------------------------------------------------------------------------
 
+/// Normalize a `foreign_keys` pragma value to a safe SQL-safe form.
+///
+/// Accepts `ON`, `OFF`, `1`, `0` (case-insensitive). Returns an error for
+/// any other value to prevent SQL injection via malformed config.
+fn normalize_foreign_keys(value: &str) -> Result<&'static str> {
+    match value.trim().to_uppercase().as_str() {
+        "ON" | "1" => Ok("ON"),
+        "OFF" | "0" => Ok("OFF"),
+        _ => Err(anyhow::anyhow!(
+            "invalid foreign_keys pragma value: \"{value}\" (expected ON, OFF, 1, or 0)"
+        )),
+    }
+}
+
 /// Build the baseline schema by applying all migrations to an in-memory database.
 ///
 /// Mirrors the apply logic in `stig migrate`: strips `stig: non-transactional`
@@ -115,7 +129,8 @@ fn build_baseline(
 
     ensure_schema_migrations(&conn)?;
 
-    conn.execute_batch(&format!("PRAGMA foreign_keys={};", pragmas.foreign_keys))?;
+    let fk = normalize_foreign_keys(&pragmas.foreign_keys)?;
+    conn.execute_batch(&format!("PRAGMA foreign_keys={fk};"))?;
 
     for file in files {
         let content = std::fs::read_to_string(&file.path)
@@ -424,6 +439,7 @@ fn generate_table_recreation(
     dependents: Option<&[SchemaObject]>,
     foreign_keys: &str,
 ) -> Result<String> {
+    let fk = normalize_foreign_keys(foreign_keys)?;
     let old_cols = extract_columns(old_sql)?;
     let new_cols = extract_columns(new_sql)?;
 
@@ -490,7 +506,7 @@ fn generate_table_recreation(
     parts.push("RELEASE sp;".to_string());
     // Restore foreign_keys to the configured project value so subsequent
     // migrations on the same connection are not affected by the temporary disable.
-    parts.push(format!("PRAGMA foreign_keys={};", foreign_keys));
+    parts.push(format!("PRAGMA foreign_keys={fk};"));
 
     Ok(parts.join("\n"))
 }
