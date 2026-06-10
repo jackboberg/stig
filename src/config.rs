@@ -129,10 +129,10 @@ pub struct GenerateTarget {
 
     /// Table-name glob patterns to exclude from codegen output.
     ///
-    /// When dispatching through [`codegen::run_targets`], internal tables
-    /// (`sqlite_%` and `schema_migrations`) are merged into this list
-    /// automatically. Library consumers bypassing `run_targets` should
-    /// apply those exclusions themselves.
+    /// When dispatching through [`crate::codegen::run_targets`], internal
+    /// tables (`sqlite_%` and `schema_migrations`) are merged into the
+    /// effective exclude list automatically. Library consumers bypassing
+    /// `run_targets` should apply those exclusions themselves.
     #[serde(default)]
     pub exclude: Vec<String>,
 
