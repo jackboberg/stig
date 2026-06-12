@@ -128,8 +128,11 @@ pub struct GenerateTarget {
     pub format: Option<String>,
 
     /// Table-name glob patterns to exclude from codegen output.
-    /// Defaults to `["sqlite_%", "schema_migrations"]`.
-    #[serde(default = "default_exclude")]
+    ///
+    /// When dispatching through [`crate::codegen::run_targets`], internal
+    /// tables (`sqlite_%` and `schema_migrations`) are automatically added
+    /// to the effective exclude list.
+    #[serde(default)]
     pub exclude: Vec<String>,
 
     /// Kind-specific options captured from unknown TOML keys.
@@ -140,10 +143,6 @@ pub struct GenerateTarget {
     /// reject unrecognized keys if needed.
     #[serde(flatten)]
     pub extra: toml::Table,
-}
-
-fn default_exclude() -> Vec<String> {
-    vec!["sqlite_%".to_string(), "schema_migrations".to_string()]
 }
 
 // ---------------------------------------------------------------------------

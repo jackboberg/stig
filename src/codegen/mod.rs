@@ -9,6 +9,31 @@ use crate::config::GenerateTarget;
 use crate::errors::CliError;
 
 // ---------------------------------------------------------------------------
+// Internal exclusions
+// ---------------------------------------------------------------------------
+
+/// Table-name patterns that are always excluded from codegen output.
+///
+/// These are merged into every target's `exclude` list at dispatch time so
+/// that all targets (current and future) automatically skip internal SQLite
+/// tables and the schema_migrations tracking table.
+const INTERNAL_EXCLUDE: &[&str] = &["sqlite_%", "schema_migrations"];
+
+/// Merge internal exclusions with user-provided patterns.
+///
+/// Returns a deduplicated list with internal patterns first, followed by
+/// user-provided patterns in their original order.
+fn merge_excludes(user_exclude: &[String]) -> Vec<String> {
+    let mut merged: Vec<String> = INTERNAL_EXCLUDE.iter().map(|s| s.to_string()).collect();
+    for pattern in user_exclude {
+        if !merged.contains(pattern) {
+            merged.push(pattern.clone());
+        }
+    }
+    merged
+}
+
+// ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
 
@@ -155,9 +180,11 @@ pub fn run_targets(
             }
         };
 
+        let exclude = merge_excludes(&entry.exclude);
+
         let config = CodegenConfig {
             path: project_root.join(&entry.path),
-            exclude: entry.exclude.clone(),
+            exclude,
             format: entry.format.clone(),
             extra: entry.extra.clone(),
         };
@@ -403,7 +430,38 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------
-    // 8. CodegenError converts to CliError with correct exit codes
+    // 8. Internal exclusions merged into CodegenConfig
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn merge_excludes_adds_internal_patterns() {
+        let result = merge_excludes(&[]);
+        assert_eq!(result, vec!["sqlite_%", "schema_migrations"]);
+    }
+
+    #[test]
+    fn merge_excludes_deduplicates_user_patterns() {
+        let result = merge_excludes(&[
+            "schema_migrations".to_string(),
+            "custom_excluded".to_string(),
+        ]);
+        assert_eq!(
+            result,
+            vec!["sqlite_%", "schema_migrations", "custom_excluded"]
+        );
+    }
+
+    #[test]
+    fn merge_excludes_preserves_user_order() {
+        let result = merge_excludes(&["zzz_custom".to_string(), "aaa_custom".to_string()]);
+        assert_eq!(
+            result,
+            vec!["sqlite_%", "schema_migrations", "zzz_custom", "aaa_custom"]
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // 9. CodegenError converts to CliError with correct exit codes
     // -----------------------------------------------------------------------
 
     #[test]
