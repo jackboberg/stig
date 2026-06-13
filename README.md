@@ -328,6 +328,27 @@ cargo clippy --all-targets -- -D warnings
 cargo test --all
 ```
 
+## Versioning
+
+This project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html):
+
+- **MAJOR** — incompatible CLI or configuration changes
+- **MINOR** — new functionality (commands, options, codegen targets)
+- **PATCH** — bug fixes and documentation improvements
+
+Until v1.0.0, minor releases may contain breaking changes. These will be
+documented in the [CHANGELOG](./CHANGELOG.md) with migration guidance.
+
+### Installing a specific version
+
+```sh
+# Via cargo-install from crates.io
+cargo install stig --version 0.1.0
+
+# Via prebuilt binary from GitHub Releases
+curl -sSL https://github.com/jackboberg/stig/releases/download/v0.1.0/stig-v0.1.0-x86_64-apple-darwin.tar.gz | tar xz
+```
+
 ## License
 
 MIT. See [`LICENSE`](./LICENSE).
