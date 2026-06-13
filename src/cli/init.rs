@@ -74,18 +74,18 @@ fn create_migrations_dir(config: &Config, project_root: &Path) -> anyhow::Result
 }
 
 /// Create the backups directory tree (`snapshots/`, `resets/`) and write a
-/// `.gitignore` that excludes all contents.
+/// `.gitignore` inside each subdirectory to exclude its contents.
 fn create_backups_dir(config: &Config, project_root: &Path) -> anyhow::Result<()> {
     let base = project_root.join(&config.backups_dir);
     for sub in ["snapshots", "resets"] {
         let dir = base.join(sub);
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("failed to create {}", dir.display()))?;
-    }
-    let gitignore = base.join(".gitignore");
-    if !gitignore.exists() {
-        std::fs::write(&gitignore, "*\n")
-            .with_context(|| format!("failed to write {}", gitignore.display()))?;
+        let gitignore = dir.join(".gitignore");
+        if !gitignore.exists() {
+            std::fs::write(&gitignore, "*\n")
+                .with_context(|| format!("failed to write {}", gitignore.display()))?;
+        }
     }
     println!(
         "✓ created {}/{{snapshots,resets}}/ (gitignored)",

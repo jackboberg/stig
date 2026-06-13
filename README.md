@@ -208,7 +208,7 @@ database_path = "app.db"
 migrations_dir = "db/migrations"
 
 # Where snapshots and reset backups live. Created by `init` with a .gitignore.
-backups_dir = ".local/db-backups"
+backups_dir = "db"
 
 # How many pre-migration snapshots to retain.
 snapshot_keep = 5

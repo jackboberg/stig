@@ -96,7 +96,7 @@ fn backups_prune_yes() {
     // Migrate with default snapshot_keep (5) — all 3 snapshots are kept.
     stig_cmd(&dir).arg("migrate").assert().success();
 
-    let snapshots_dir = dir.path().join(".local/db-backups/snapshots");
+    let snapshots_dir = dir.path().join("db/snapshots");
     assert_eq!(
         count_db_files(&snapshots_dir),
         3,
@@ -137,7 +137,7 @@ fn backups_prune_declined() {
 
     stig_cmd(&dir).arg("migrate").assert().success();
 
-    let snapshots_dir = dir.path().join(".local/db-backups/snapshots");
+    let snapshots_dir = dir.path().join("db/snapshots");
     assert_eq!(count_db_files(&snapshots_dir), 1);
 
     stig_cmd(&dir)

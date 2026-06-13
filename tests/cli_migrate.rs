@@ -17,7 +17,7 @@ fn count_schema_migrations(dir: &TempDir) -> i64 {
 /// Check whether a snapshot file exists for `version`.
 fn snapshot_exists(dir: &TempDir, version: &str) -> bool {
     dir.path()
-        .join(format!(".local/db-backups/snapshots/pre-{version}.db"))
+        .join(format!("db/snapshots/pre-{version}.db"))
         .exists()
 }
 
@@ -28,7 +28,7 @@ fn migrations_dir(dir: &TempDir) -> std::path::PathBuf {
 
 /// Count snapshot `.db` files in the snapshots directory.
 fn count_snapshot_files(dir: &TempDir) -> usize {
-    let snaps_dir = dir.path().join(".local/db-backups/snapshots");
+    let snaps_dir = dir.path().join("db/snapshots");
     if !snaps_dir.exists() {
         return 0;
     }
@@ -418,14 +418,14 @@ fn migrate_prunes_snapshots() {
     let config = indoc::indoc! {r#"
         database_path  = "app.db"
         migrations_dir = "db/migrations"
-        backups_dir    = ".local/db-backups"
+        backups_dir    = "db"
         snapshot_keep  = 1
         auto_snapshot  = true
         checksum_check = true
     "#};
     std::fs::write(dir.path().join("stig.toml"), config).unwrap();
     std::fs::create_dir_all(dir.path().join("db/migrations")).unwrap();
-    std::fs::create_dir_all(dir.path().join(".local/db-backups/snapshots")).unwrap();
+    std::fs::create_dir_all(dir.path().join("db/snapshots")).unwrap();
 
     write_migration(
         &dir,
@@ -477,7 +477,7 @@ fn migrate_drift_with_pruned_snapshot_hard_fail() {
     stig_cmd(&dir).arg("migrate").assert().success();
 
     // Delete the snapshot to simulate pruning.
-    let snaps_dir = dir.path().join(".local/db-backups/snapshots");
+    let snaps_dir = dir.path().join("db/snapshots");
     for entry in std::fs::read_dir(&snaps_dir).unwrap() {
         let entry = entry.unwrap();
         if entry.file_name().to_string_lossy().starts_with("pre-") {
@@ -561,14 +561,14 @@ fn migrate_prunes_snapshots_across_keep() {
     let config = indoc::indoc! {r#"
         database_path  = "app.db"
         migrations_dir = "db/migrations"
-        backups_dir    = ".local/db-backups"
+        backups_dir    = "db"
         snapshot_keep  = 2
         auto_snapshot  = true
         checksum_check = true
     "#};
     std::fs::write(dir.path().join("stig.toml"), config).unwrap();
     std::fs::create_dir_all(dir.path().join("db/migrations")).unwrap();
-    std::fs::create_dir_all(dir.path().join(".local/db-backups/snapshots")).unwrap();
+    std::fs::create_dir_all(dir.path().join("db/snapshots")).unwrap();
 
     for i in 1..=4 {
         let ts = format!("2024010{i}000000");
@@ -699,14 +699,14 @@ fn migrate_large_set_with_pruning() {
     let config = indoc::indoc! {r#"
         database_path  = "app.db"
         migrations_dir = "db/migrations"
-        backups_dir    = ".local/db-backups"
+        backups_dir    = "db"
         snapshot_keep  = 3
         auto_snapshot  = true
         checksum_check = true
     "#};
     std::fs::write(dir.path().join("stig.toml"), config).unwrap();
     std::fs::create_dir_all(dir.path().join("db/migrations")).unwrap();
-    std::fs::create_dir_all(dir.path().join(".local/db-backups/snapshots")).unwrap();
+    std::fs::create_dir_all(dir.path().join("db/snapshots")).unwrap();
 
     for i in 0..20 {
         let ts = format!("202401{:02}000000", i + 1);
