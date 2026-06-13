@@ -232,7 +232,18 @@ TBD - need to hash out a bit more of this process.
 
 [Needs Collaborator](#join-the-project-team): Committer
 
-TBD - need to hash out a bit more of this process. The most important bit here is probably that all tests must pass, and tags must use [semver](https://semver.org).
+1. Ensure all CI checks pass on `main`.
+2. Update `CHANGELOG.md` with the release date and any new entries under `[Unreleased]`.
+3. Create and push a semver tag:
+   ```sh
+   git tag -a v0.1.0 -m "v0.1.0"
+   git push origin v0.1.0
+   ```
+4. The [release workflow](.github/workflows/release.yml) will:
+   - Build binaries for macOS (x86_64, aarch64) and Linux (x86_64)
+   - Create a GitHub Release with the artifacts
+   - Publish to crates.io (if `CARGO_REGISTRY_TOKEN` secret is configured)
+5. Verify the release at https://github.com/jackboberg/stig/releases
 
 ## Join the Project Team
 
