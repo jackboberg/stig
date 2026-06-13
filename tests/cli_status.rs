@@ -144,12 +144,12 @@ fn status_checksum_check_off_hides_drift() {
     let config = indoc::indoc! {r#"
         database_path  = "app.db"
         migrations_dir = "db/migrations"
-        backups_dir    = ".local/db-backups"
+        backups_dir    = "db"
         checksum_check = false
     "#};
     std::fs::write(dir.path().join("stig.toml"), config).unwrap();
     std::fs::create_dir_all(dir.path().join("db/migrations")).unwrap();
-    std::fs::create_dir_all(dir.path().join(".local/db-backups/snapshots")).unwrap();
+    std::fs::create_dir_all(dir.path().join("db/snapshots")).unwrap();
 
     write_migration(
         &dir,
@@ -213,7 +213,7 @@ fn status_snapshot_pruned() {
     stig_cmd(&dir).arg("migrate").assert().success();
 
     // Delete the snapshot to simulate pruning
-    let snapshots_dir = dir.path().join(".local/db-backups/snapshots");
+    let snapshots_dir = dir.path().join("db/snapshots");
     for entry in std::fs::read_dir(&snapshots_dir).unwrap() {
         let entry = entry.unwrap();
         if entry.file_name().to_string_lossy().starts_with("pre-") {

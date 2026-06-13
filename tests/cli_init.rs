@@ -20,7 +20,7 @@ fn init_creates_all_expected_artifacts() {
         .stdout(predicate::str::contains("✓ wrote stig.toml"))
         .stdout(predicate::str::contains("✓ created db/migrations/"))
         .stdout(predicate::str::contains(
-            "✓ created .local/db-backups/{snapshots,resets}/ (gitignored)",
+            "✓ created db/{snapshots,resets}/ (gitignored)",
         ))
         .stdout(predicate::str::contains(
             "✓ created schema_migrations in app.db",
@@ -33,13 +33,15 @@ fn init_creates_all_expected_artifacts() {
     assert!(dir.path().join("db/migrations").is_dir());
 
     // Backups directory tree created.
-    assert!(dir.path().join(".local/db-backups/snapshots").is_dir());
-    assert!(dir.path().join(".local/db-backups/resets").is_dir());
+    assert!(dir.path().join("db/snapshots").is_dir());
+    assert!(dir.path().join("db/resets").is_dir());
 
-    // .gitignore written inside backups dir.
-    let gitignore = dir.path().join(".local/db-backups/.gitignore");
-    assert!(gitignore.is_file());
-    assert_eq!(std::fs::read_to_string(gitignore).unwrap(), "*\n");
+    // .gitignore written inside each backups subdirectory.
+    for sub in ["snapshots", "resets"] {
+        let gitignore = dir.path().join(format!("db/{sub}/.gitignore"));
+        assert!(gitignore.is_file());
+        assert_eq!(std::fs::read_to_string(&gitignore).unwrap(), "*\n");
+    }
 
     // Database created and schema_migrations table exists.
     assert!(dir.path().join("app.db").is_file());

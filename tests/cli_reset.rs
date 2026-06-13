@@ -33,7 +33,7 @@ fn table_exists(dir: &TempDir, name: &str) -> bool {
 
 /// Count `.db` files in the resets directory.
 fn count_reset_files(dir: &TempDir) -> usize {
-    let resets_dir = dir.path().join(".local/db-backups/resets");
+    let resets_dir = dir.path().join("db/resets");
     std::fs::read_dir(&resets_dir)
         .unwrap()
         .filter_map(|e| e.ok())
@@ -114,7 +114,7 @@ fn reset_creates_backup_artifact() {
 
     stig_cmd(&dir).arg("migrate").assert().success();
 
-    let resets_dir = dir.path().join(".local/db-backups/resets");
+    let resets_dir = dir.path().join("db/resets");
 
     stig_cmd(&dir).arg("reset").arg("--yes").assert().success();
 
@@ -159,7 +159,7 @@ fn reset_prunes_resets_beyond_keep() {
     // Pre-create 3 old reset backup files with distinct mtimes.
     // These simulate prior reset runs without needing to invoke the CLI
     // multiple times or sleep between them.
-    let resets_dir = dir.path().join(".local/db-backups/resets");
+    let resets_dir = dir.path().join("db/resets");
     std::fs::create_dir_all(&resets_dir).unwrap();
     for i in 1u8..=3 {
         let path = resets_dir.join(format!("reset-synth-{i:03}.db"));
@@ -251,8 +251,8 @@ fn reset_creates_resets_dir_if_missing() {
     stig_cmd(&dir).arg("migrate").assert().success();
 
     // Remove the resets dir to verify reset recreates it.
-    let resets_dir = dir.path().join(".local/db-backups/resets");
-    std::fs::remove_dir(&resets_dir).unwrap();
+    let resets_dir = dir.path().join("db/resets");
+    std::fs::remove_dir_all(&resets_dir).unwrap();
     assert!(!resets_dir.exists());
 
     stig_cmd(&dir).arg("reset").arg("--yes").assert().success();

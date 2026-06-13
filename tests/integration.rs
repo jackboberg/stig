@@ -30,7 +30,7 @@ fn table_exists(dir: &TempDir, name: &str) -> bool {
 }
 
 fn count_reset_files(dir: &TempDir) -> usize {
-    let resets_dir = dir.path().join(".local/db-backups/resets");
+    let resets_dir = dir.path().join("db/resets");
     if !resets_dir.exists() {
         return 0;
     }
@@ -479,7 +479,7 @@ fn redo_after_pruned_snapshot_lists_eligible() {
     stig_cmd(&dir).arg("migrate").assert().success();
 
     // Delete the first snapshot (simulate pruning).
-    let snaps_dir = dir.path().join(".local/db-backups/snapshots");
+    let snaps_dir = dir.path().join("db/snapshots");
     std::fs::remove_file(snaps_dir.join("pre-20240101000000_first.db")).unwrap();
 
     // Try to redo from the first migration — snapshot is gone.

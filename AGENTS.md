@@ -75,7 +75,7 @@ Default layout:
 stig.toml
 app.db
 db/migrations/*.sql
-.local/db-backups/{snapshots,resets}/
+db/{snapshots,resets}/
 ```
 
 ## Exit Codes

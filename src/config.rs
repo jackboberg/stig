@@ -228,7 +228,7 @@ fn default_migrations_dir() -> String {
     "db/migrations".to_string()
 }
 fn default_backups_dir() -> String {
-    ".local/db-backups".to_string()
+    "db".to_string()
 }
 fn default_snapshot_keep() -> u32 {
     5
