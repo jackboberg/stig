@@ -346,7 +346,7 @@ documented in the [CHANGELOG](./CHANGELOG.md) with migration guidance.
 cargo install stig --version 0.1.0
 
 # Via prebuilt binary from GitHub Releases
-curl -sSL https://github.com/jackboberg/stig/releases/download/v0.1.0/stig-v0.1.0-x86_64-apple-darwin.tar.gz | tar xz
+curl -sSL https://github.com/jackboberg/stig/releases/download/v0.1.0/stig-v0.1.0-aarch64-apple-darwin.tar.gz | tar xz
 ```
 
 ## License

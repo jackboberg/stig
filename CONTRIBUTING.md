@@ -262,7 +262,7 @@ TBD - need to hash out a bit more of this process.
    - Push commit and tag to `origin`
 4. The [release workflow](.github/workflows/release.yml) triggers on the tag and will:
    - Run fmt, clippy, tests, and `cargo publish --dry-run`
-   - Build binaries for macOS (x86_64, aarch64) and Linux (x86_64)
+   - Build binaries for macOS (aarch64) and Linux (x86_64)
    - Create a GitHub Release with the artifacts
    - Publish to crates.io (if `CARGO_REGISTRY_TOKEN` secret is configured)
 5. Verify the release at https://github.com/jackboberg/stig/releases
