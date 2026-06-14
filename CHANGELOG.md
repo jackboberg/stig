@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0] - YYYY-MM-DD
-
 ### Added
 
 - Forward-only SQLite migrations with filesystem snapshots for rollback
@@ -20,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `redo` — restore snapshot and re-apply a migration
 - `reset` — destructive re-migration from empty
 - `generate` — run codegen targets against live schema
+- `schema diff` — generate migrations from schema differences
 - `backups list` / `backups prune` — manage snapshots and reset backups
 - Configuration via `stig.toml` with environment variable overrides
 - Drift detection via migration checksums
