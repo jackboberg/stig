@@ -2,6 +2,13 @@
 name = "stig"
 version = "0.1.0"
 edition = "2024"
+authors = ["Jack Boberg <hello@jackboberg.info>"]
+description = "A SQLite migration and schema CLI"
+repository = "https://github.com/jackboberg/stig"
+license = "MIT"
+readme = "README.md"
+keywords = ["sqlite", "migration", "schema", "cli"]
+categories = ["command-line-utilities", "database"]
 
 [lib]
 name = "stig"
@@ -34,3 +41,15 @@ indoc = "2"
 insta = { version = "1.47.2", features = ["yaml"] }
 predicates = "3.1.4"
 tempfile = "3.27.0"
+
+[package.metadata.release]
+allow-branch = ["main"]
+publish = false
+push = true
+pre-release-commit-message = "chore: release v{{version}}"
+tag-message = "chore: release v{{version}}"
+
+[[package.metadata.release.pre-release-replacements]]
+file = "CHANGELOG.md"
+search = "## \\[[0-9.]+\\] - YYYY-MM-DD"
+replace = "## [{{version}}] - {{date}}"

@@ -232,7 +232,40 @@ TBD - need to hash out a bit more of this process.
 
 [Needs Collaborator](#join-the-project-team): Committer
 
-TBD - need to hash out a bit more of this process. The most important bit here is probably that all tests must pass, and tags must use [semver](https://semver.org).
+### Prerequisites
+
+- Install cargo-release: `cargo install cargo-release`
+- Ensure `CARGO_REGISTRY_TOKEN` is configured as a GitHub Actions secret
+
+### Process
+
+1. Ensure all CI checks pass on `main`.
+2. Move entries from `[Unreleased]` in `CHANGELOG.md` under a new version header:
+   ```markdown
+   ## [Unreleased]
+
+   ## [0.2.0] - YYYY-MM-DD
+
+   ### Added
+   - New feature description
+   ```
+   Use `YYYY-MM-DD` as the date placeholder — cargo-release will fill in the actual date.
+3. Run cargo-release:
+   ```sh
+   cargo release 0.2.0 --execute
+   ```
+   This will:
+   - Replace the `YYYY-MM-DD` placeholder with today's date in `CHANGELOG.md`
+   - Bump the version in `Cargo.toml` and `Cargo.lock`
+   - Commit with message `chore: release v0.2.0`
+   - Create annotated tag `v0.2.0`
+   - Push commit and tag to `origin`
+4. The [release workflow](.github/workflows/release.yml) triggers on the tag and will:
+   - Run fmt, clippy, tests, and `cargo publish --dry-run`
+   - Build binaries for macOS (x86_64, aarch64) and Linux (x86_64)
+   - Create a GitHub Release with the artifacts
+   - Publish to crates.io (if `CARGO_REGISTRY_TOKEN` secret is configured)
+5. Verify the release at https://github.com/jackboberg/stig/releases
 
 ## Join the Project Team
 
