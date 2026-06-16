@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
+use chrono::NaiveDateTime;
 
 use crate::config::Config;
 use crate::config::env_source::ProcessEnv;
@@ -44,6 +45,7 @@ pub fn run(timestamp: Option<String>, yes: bool) -> anyhow::Result<()> {
 fn resolve_backup(resets_dir: &Path, timestamp: Option<&str>) -> anyhow::Result<PathBuf> {
     match timestamp {
         Some(ts) => {
+            validate_timestamp(ts)?;
             let path = resets_dir.join(format!("reset-{ts}.db"));
             if !path.is_file() {
                 return Err(CliError::Prerequisite(format!(
@@ -58,6 +60,15 @@ fn resolve_backup(resets_dir: &Path, timestamp: Option<&str>) -> anyhow::Result<
             CliError::Prerequisite(format!("failed to locate a reset backup to restore: {e}"))
         })?),
     }
+}
+
+/// Validate that `ts` matches the reset backup timestamp format
+/// `%Y%m%dT%H%M%SZ` and represents a real datetime.
+fn validate_timestamp(ts: &str) -> anyhow::Result<()> {
+    if NaiveDateTime::parse_from_str(ts, "%Y%m%dT%H%M%SZ").is_err() {
+        return Err(CliError::Usage(format!("invalid timestamp format: {ts}")).into());
+    }
+    Ok(())
 }
 
 /// Prompt for confirmation unless `--yes` was passed.

@@ -141,6 +141,26 @@ fn restore_errors_when_backup_missing() {
         .stderr(predicate::str::contains("reset backup not found"));
 }
 
+// Invalid timestamp format is rejected as a usage error (also prevents path
+// traversal in the timestamp argument).
+#[test]
+fn restore_errors_on_invalid_timestamp_format() {
+    let dir = TempDir::new().unwrap();
+
+    stig_cmd(&dir).arg("init").assert().success();
+
+    for invalid in ["../etc/passwd", "2024-01-01", "20240101", "not-a-timestamp"] {
+        stig_cmd(&dir)
+            .arg("restore")
+            .arg(invalid)
+            .arg("--yes")
+            .assert()
+            .failure()
+            .code(2)
+            .stderr(predicate::str::contains("invalid timestamp format"));
+    }
+}
+
 // No backups at all errors cleanly.
 #[test]
 fn restore_errors_when_no_backups_exist() {
