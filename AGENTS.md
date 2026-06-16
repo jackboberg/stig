@@ -30,13 +30,13 @@ Commit-msg: conventional commits enforced (e.g., `feat(cli): add redo command`).
 src/
 ├── main.rs          # clap entrypoint, dispatches to cli/*::run()
 ├── lib.rs           # pub(crate) sha256_hex + module declarations
-├── cli/             # one module per subcommand (init, new, migrate, status, redo, reset, generate, backups, schema)
+├── cli/             # one module per subcommand (init, new, migrate, status, redo, reset, restore, generate, backups, schema)
 ├── config.rs        # TOML loader, precedence: CLI flags > STIG_* env > stig.toml > defaults
 ├── db.rs            # rusqlite open + PRAGMAs + WAL checkpoint
 ├── errors.rs        # CliError enum with exit codes (see below)
 ├── migrate/         # discover (filename parsing), plan (diff logic), apply (execute + record)
 ├── schema/          # schema diff generation (diff.rs)
-├── snapshot.rs      # copy/restore/prune pre-migration DB snapshots
+├── snapshot.rs      # copy/restore/prune pre-migration DB snapshots + reset backup restore
 └── codegen/         # trait + TypeScript target (stub)
 ```
 
