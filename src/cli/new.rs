@@ -48,24 +48,42 @@ pub fn run(description: String, no_edit: bool) -> anyhow::Result<()> {
         && let Ok(editor) = std::env::var("EDITOR")
         && !editor.is_empty()
     {
+        let mut parts = split_editor(&editor)?;
+        if parts.is_empty() {
+            return Err(CliError::Generic(anyhow::anyhow!(
+                "EDITOR environment variable contains no command"
+            ))
+            .into());
+        }
+        let program = parts.remove(0);
+
         println!("  opening in {} ...", editor);
-        // Treat EDITOR as a program path only. Argument-bearing values like
-        // `EDITOR="code -w"` cannot be split reliably without a shell-word
-        // parser; per POSIX convention EDITOR should be a bare executable
-        // path. Users who need flags should wrap the editor in a script.
-        let status = std::process::Command::new(&editor)
+        let status = std::process::Command::new(&program)
+            .args(&parts)
             .arg(&path)
             .status()
-            .with_context(|| format!("failed to launch editor `{editor}`"))?;
+            .with_context(|| format!("failed to launch editor `{program}`"))?;
         if !status.success() {
             return Err(CliError::Generic(anyhow::anyhow!(
-                "editor `{editor}` exited with {status}"
+                "editor `{program}` exited with {status}"
             ))
             .into());
         }
     }
 
     Ok(())
+}
+
+/// Parse an `$EDITOR` value into command words using POSIX shell quoting rules.
+///
+/// Returns a `CliError::Generic` (exit 1) if the value is malformed.
+fn split_editor(editor: &str) -> anyhow::Result<Vec<String>> {
+    shell_words::split(editor).map_err(|e| {
+        CliError::Generic(anyhow::Error::from(e).context(format!(
+            "failed to parse EDITOR environment variable `{editor}`"
+        )))
+        .into()
+    })
 }
 
 /// Slugify a migration description per §3.2.
@@ -347,5 +365,46 @@ mod tests {
         assert!(content.contains("-- Created:   2026-05-29T10:30:00+00:00"));
         assert!(content.contains("-- stig: non-transactional"));
         assert!(content.ends_with("\n\n"));
+    }
+
+    // ── split_editor ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn split_editor_bare_executable() {
+        assert_eq!(split_editor("vim").unwrap(), vec!["vim"]);
+    }
+
+    #[test]
+    fn split_editor_with_argument() {
+        assert_eq!(split_editor("code -w").unwrap(), vec!["code", "-w"]);
+    }
+
+    #[test]
+    fn split_editor_quoted_path_with_spaces() {
+        assert_eq!(
+            split_editor("'/path/with spaces' -w").unwrap(),
+            vec!["/path/with spaces", "-w"]
+        );
+    }
+
+    #[test]
+    fn split_editor_double_quoted_argument() {
+        assert_eq!(
+            split_editor("ed \"-u NONE\"").unwrap(),
+            vec!["ed", "-u NONE"]
+        );
+    }
+
+    #[test]
+    fn split_editor_malformed_returns_generic_error() {
+        let err = split_editor("\"unclosed").unwrap_err();
+        let cli_err = err.downcast_ref::<CliError>().expect("should be CliError");
+        assert!(matches!(cli_err, CliError::Generic(_)));
+        assert_eq!(cli_err.exit_code(), 1);
+    }
+
+    #[test]
+    fn split_editor_whitespace_returns_empty() {
+        assert!(split_editor("   ").unwrap().is_empty());
     }
 }
