@@ -46,9 +46,21 @@ pub fn run(yes: bool) -> anyhow::Result<()> {
     let db_path = config.resolve_path(&config.database_path);
 
     println!("moving database to resets/");
-    snapshot::take_reset_backup(&db_path, &resets_dir).context("failed to create reset backup")?;
+    let backup_path = snapshot::take_reset_backup(&db_path, &resets_dir)
+        .context("failed to create reset backup")?;
 
-    reapply_pending(&config, &migrations_dir)?;
+    if let Err(e) = reapply_pending(&config, &migrations_dir) {
+        eprintln!("reset failed; restoring database from resets/");
+        if let Err(restore_err) = snapshot::restore_reset_backup_from_path(&backup_path, &db_path) {
+            return Err(anyhow::anyhow!(
+                "reapply failed: {e}\n\
+                 also failed to restore reset backup from {}: {restore_err}\n\
+                 the reset backup remains in resets/ for manual recovery",
+                backup_path.display()
+            ));
+        }
+        return Err(e);
+    }
 
     println!("✓ reset complete");
 
