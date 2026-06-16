@@ -144,12 +144,38 @@ stig reset [OPTIONS]
 Destructive. Renames the live database into the resets backup directory and
 re-migrates from empty. Prompts for confirmation unless `--yes` is passed.
 
+If re-applying migrations fails partway through, the original database is
+automatically restored from the reset backup. If that restore also fails, the
+backup remains in `resets/` for manual recovery.
+
 Use this when a migration has been edited but its snapshot has already been
 pruned, or when you want a clean slate.
 
 ```sh
 # Chain with your project's seed command
 stig reset --yes && my-project seed
+```
+
+### restore
+
+```text
+stig restore [TIMESTAMP] [OPTIONS]
+```
+
+Restores the database from a reset backup created by `stig reset`. With no
+`TIMESTAMP`, restores the most recent reset backup. With a timestamp, restores
+the matching `reset-<TIMESTAMP>.db` file.
+
+Prompts for confirmation unless `--yes` is passed.
+
+Use this to return to a previous database state after testing against a fresh
+reset.
+
+```text
+$ stig reset --yes
+$ # ... test with empty database ...
+$ stig restore --yes
+✓ restored database from reset-20260520T101500Z.db
 ```
 
 ### generate
