@@ -269,6 +269,86 @@ pub fn prune_resets(resets_dir: &Path, keep: u32) -> Result<()> {
     prune_dir(resets_dir, "reset-", keep)
 }
 
+/// Restore a specific reset backup file (plus `-wal`/`-shm` sidecars) back
+/// to `db_path`.
+///
+/// Uses rollback safety: before overwriting the live database, any partial
+/// files at the destination are moved to a temporary location and restored on
+/// failure.
+///
+/// Any `-journal` file at the destination is removed (it belongs to the
+/// partially-created database, not the backup).
+pub fn restore_reset_backup_from_path(backup_path: &Path, db_path: &Path) -> Result<()> {
+    let mut pairs: Vec<(Option<PathBuf>, PathBuf)> =
+        vec![(Some(backup_path.to_path_buf()), db_path.to_path_buf())];
+    for ext in ["-wal", "-shm"] {
+        let src = sidecar(backup_path, ext);
+        let src_opt = if src.exists() { Some(src) } else { None };
+        pairs.push((src_opt, sidecar(db_path, ext)));
+    }
+
+    // A rollback-journal file at the destination belongs to the partial DB,
+    // not the backup; ensure it is absent after restore.
+    let journal_dst = sidecar(db_path, "-journal");
+    if journal_dst.exists() {
+        pairs.push((None, journal_dst));
+    }
+
+    atomic_replace_with_rollback(&pairs)
+        .context("failed to restore reset backup; original state restored")
+}
+
+/// Find the most recent `reset-*.db` backup in `resets_dir` and copy it
+/// (plus `-wal`/`-shm` sidecars) back to `db_path`.
+///
+/// Returns an error if no reset backup exists.
+pub fn restore_reset_backup(db_path: &Path, resets_dir: &Path) -> Result<()> {
+    let backup = most_recent_reset(resets_dir)?;
+    restore_reset_backup_from_path(&backup, db_path)
+}
+
+/// Return the path of the most recent `reset-*.db` file in `resets_dir`
+/// by filename ordering (timestamps embedded in filenames are ISO-8601
+/// compatible, so lexicographic sort is chronological).
+pub(crate) fn most_recent_reset(resets_dir: &Path) -> Result<PathBuf> {
+    if !resets_dir.is_dir() {
+        anyhow::bail!("resets directory does not exist: {}", resets_dir.display());
+    }
+
+    let mut entries: Vec<PathBuf> = std::fs::read_dir(resets_dir)
+        .with_context(|| format!("failed to read directory {}", resets_dir.display()))?
+        .map(|entry| {
+            let entry = entry
+                .with_context(|| format!("failed to read entry in {}", resets_dir.display()))?;
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("reset-") && name.ends_with(".db") {
+                let is_file = entry
+                    .file_type()
+                    .with_context(|| format!("failed to read file type for {}", name))?
+                    .is_file();
+                if is_file {
+                    return Ok(Some(entry.path()));
+                }
+            }
+            Ok(None)
+        })
+        .filter_map(|r| r.transpose())
+        .collect::<Result<Vec<_>>>()?;
+
+    if entries.is_empty() {
+        anyhow::bail!("no reset backups found in {}", resets_dir.display());
+    }
+
+    // Sort by filename descending (newest timestamp first).
+    entries.sort_by(|a, b| {
+        b.file_name()
+            .unwrap_or_default()
+            .cmp(a.file_name().unwrap_or_default())
+    });
+    Ok(entries.into_iter().next().unwrap())
+}
+
 // ---------------------------------------------------------------------------
 // Private helpers
 // ---------------------------------------------------------------------------
@@ -312,15 +392,28 @@ fn move_file(src: &Path, dst: &Path) -> Result<()> {
 }
 
 /// Move `path` to a sibling temp file and record `(original, temp)` in `saved`.
+///
+/// Uses a unique temp filename to avoid colliding with a leftover `.stig-tmp`
+/// file from a previous crash.
 fn move_to_temp(path: &Path, saved: &mut Vec<(PathBuf, PathBuf)>) -> Result<()> {
-    let tmp = path.with_extension(format!(
-        "{}.stig-tmp",
-        path.extension().and_then(|e| e.to_str()).unwrap_or("db")
-    ));
-    move_file(path, &tmp)
-        .with_context(|| format!("failed to move {} to temp location", path.display()))?;
-    saved.push((path.to_path_buf(), tmp));
-    Ok(())
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("db");
+    let mut counter = 0u32;
+    loop {
+        let tmp = path.with_extension(format!("{ext}.stig-tmp.{counter}"));
+        if !tmp.exists() {
+            move_file(path, &tmp)
+                .with_context(|| format!("failed to move {} to temp location", path.display()))?;
+            saved.push((path.to_path_buf(), tmp));
+            return Ok(());
+        }
+        counter += 1;
+        if counter > 1000 {
+            anyhow::bail!(
+                "could not find unique temp filename for {} after 1000 attempts",
+                path.display()
+            );
+        }
+    }
 }
 
 /// Restore saved (original, temp) pairs by moving temp back to original.
@@ -331,6 +424,67 @@ fn restore_saved(saved: &[(PathBuf, PathBuf)]) {
             let _ = move_file(tmp, orig);
         }
     }
+}
+
+/// Replace destination files with source files, preserving originals for
+/// rollback on failure.
+///
+/// Each `(src, dst)` pair is processed in two phases:
+/// 1. Move existing destination files to temp locations.
+/// 2. If `src` is `Some`, copy it into the destination position.
+///    If `src` is `None`, ensure the destination is absent (no copy).
+///
+/// If either phase fails, partially-written destination files are removed
+/// and originals are restored. On success, temp copies are deleted.
+///
+/// Note: This is rollback-safe, not truly atomic. A crash between phases
+/// can still leave the destination missing.
+fn atomic_replace_with_rollback(pairs: &[(Option<PathBuf>, PathBuf)]) -> Result<()> {
+    // Phase 1: Move existing destination files aside.
+    let mut saved: Vec<(PathBuf, PathBuf)> = Vec::new();
+    let save_result = (|| -> Result<()> {
+        for (_, dst) in pairs {
+            if dst.exists() {
+                move_to_temp(dst, &mut saved)?;
+            }
+        }
+        Ok(())
+    })();
+
+    if let Err(e) = save_result {
+        restore_saved(&saved);
+        return Err(e.context("failed to move existing files aside"));
+    }
+
+    // Phase 2: Copy source files into destination positions, or remove
+    // destination when `src` is `None`.
+    let copy_result = (|| -> Result<()> {
+        for (src, dst) in pairs {
+            if let Some(src) = src {
+                copy_file(src, dst)?;
+            } else if dst.exists() {
+                std::fs::remove_file(dst)
+                    .with_context(|| format!("failed to remove {}", dst.display()))?;
+            }
+        }
+        Ok(())
+    })();
+
+    if let Err(e) = copy_result {
+        // Remove any partially-written destination files.
+        for (_, dst) in pairs {
+            let _ = std::fs::remove_file(dst);
+        }
+        restore_saved(&saved);
+        return Err(e.context("copy failed; originals restored"));
+    }
+
+    // Success — delete the temp copies.
+    for (_, tmp) in &saved {
+        let _ = std::fs::remove_file(tmp);
+    }
+
+    Ok(())
 }
 
 /// Shared pruning logic: retain the `keep` most-recently-modified `<prefix>*.db`
@@ -823,5 +977,139 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().ends_with(".db"))
             .collect();
         assert_eq!(remaining.len(), 2);
+    }
+
+    // -----------------------------------------------------------------------
+    // restore_reset_backup
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn restore_reset_backup_round_trips_content() {
+        let dir = TempDir::new().unwrap();
+        let db = write_file(dir.path(), "app.db", b"original");
+        let resets = dir.path().join("resets");
+        std::fs::create_dir(&resets).unwrap();
+
+        // Simulate a reset backup: the content that was moved away.
+        write_file(&resets, "reset-20240101T000000Z.db", b"original");
+
+        // Simulate a partially-created database at the original path.
+        std::fs::write(&db, b"partial").unwrap();
+
+        restore_reset_backup(&db, &resets).unwrap();
+
+        assert_file_content(&db, b"original");
+    }
+
+    #[test]
+    fn restore_reset_backup_restores_sidecars() {
+        let dir = TempDir::new().unwrap();
+        let db = write_file(dir.path(), "app.db", b"db");
+        let resets = dir.path().join("resets");
+        std::fs::create_dir(&resets).unwrap();
+
+        write_file(&resets, "reset-20240101T000000Z.db", b"db-backup");
+        write_file(&resets, "reset-20240101T000000Z.db-wal", b"wal-backup");
+        write_file(&resets, "reset-20240101T000000Z.db-shm", b"shm-backup");
+
+        // Partial sidecars at destination.
+        std::fs::write(&db, b"partial-db").unwrap();
+        std::fs::write(sidecar(&db, "-wal"), b"partial-wal").unwrap();
+
+        restore_reset_backup(&db, &resets).unwrap();
+
+        assert_file_content(&db, b"db-backup");
+        assert_file_content(&sidecar(&db, "-wal"), b"wal-backup");
+        assert_file_content(&sidecar(&db, "-shm"), b"shm-backup");
+    }
+
+    #[test]
+    fn restore_reset_backup_removes_destination_journal() {
+        let dir = TempDir::new().unwrap();
+        let db = write_file(dir.path(), "app.db", b"db");
+        let resets = dir.path().join("resets");
+        std::fs::create_dir(&resets).unwrap();
+
+        write_file(&resets, "reset-20240101T000000Z.db", b"db-backup");
+
+        // A rollback-journal file from the partial DB must not survive restore.
+        write_file(dir.path(), "app.db-journal", b"partial-journal");
+
+        restore_reset_backup(&db, &resets).unwrap();
+
+        assert_file_content(&db, b"db-backup");
+        assert!(!dir.path().join("app.db-journal").exists());
+    }
+
+    #[test]
+    fn restore_reset_backup_picks_most_recent() {
+        let dir = TempDir::new().unwrap();
+        let db = write_file(dir.path(), "app.db", b"partial");
+        let resets = dir.path().join("resets");
+        std::fs::create_dir(&resets).unwrap();
+
+        // Two reset backups; filename ordering determines recency.
+        write_file(&resets, "reset-20240101T000000Z.db", b"old");
+        write_file(&resets, "reset-20240102T000000Z.db", b"new");
+
+        restore_reset_backup(&db, &resets).unwrap();
+
+        assert_file_content(&db, b"new");
+    }
+
+    #[test]
+    fn restore_reset_backup_errors_when_no_backups() {
+        let dir = TempDir::new().unwrap();
+        let db = write_file(dir.path(), "app.db", b"live");
+        let resets = dir.path().join("resets");
+        std::fs::create_dir(&resets).unwrap();
+
+        let result = restore_reset_backup(&db, &resets);
+
+        assert!(result.is_err());
+        assert_file_content(&db, b"live");
+    }
+
+    #[test]
+    fn restore_reset_backup_errors_when_dir_missing() {
+        let dir = TempDir::new().unwrap();
+        let db = write_file(dir.path(), "app.db", b"live");
+        let resets = dir.path().join("nonexistent_resets");
+
+        let result = restore_reset_backup(&db, &resets);
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn restore_reset_backup_rolls_back_on_copy_failure() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = TempDir::new().unwrap();
+        let db = write_file(dir.path(), "app.db", b"partial");
+        let resets = dir.path().join("resets");
+        std::fs::create_dir(&resets).unwrap();
+
+        let backup = write_file(&resets, "reset-20240101T000000Z.db", b"backup-content");
+
+        // Make the backup unreadable so copy fails.
+        let mut perms = std::fs::metadata(&backup).unwrap().permissions();
+        perms.set_mode(0o000);
+        std::fs::set_permissions(&backup, perms).unwrap();
+
+        let result = restore_reset_backup(&db, &resets);
+
+        // Restore permissions so TempDir cleanup can delete.
+        let mut perms = std::fs::metadata(&backup).unwrap().permissions();
+        perms.set_mode(0o644);
+        std::fs::set_permissions(&backup, perms).unwrap();
+
+        assert!(
+            result.is_err(),
+            "expected an error due to unreadable backup"
+        );
+        // The partial file at db_path should be restored.
+        assert_file_content(&db, b"partial");
     }
 }
