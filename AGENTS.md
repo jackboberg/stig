@@ -92,3 +92,8 @@ db/{snapshots,resets}/
 | 4    | `Prerequisite` | Snapshot gone, target unknown, etc.       |
 | 5    | `Locked`       | Database unavailable                      |
 
+## Changelog
+
+When opening a PR, add an entry under `## [Unreleased]` in `CHANGELOG.md`
+describing the change. Use the same format as existing entries.
+

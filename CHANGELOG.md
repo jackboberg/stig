@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `restore` — restore the database from a reset backup
+
+### Changed
+
+- `reset` — auto-restores the original database if re-applying migrations fails
+
 ## [0.1.0] - 2026-06-14
 
 ### Added
