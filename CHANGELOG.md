@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `restore` — restore the database from a reset backup
+- `stig new` now supports `$EDITOR` values with arguments (e.g. `EDITOR="code -w"`)
 
 ### Changed
 
