@@ -27,6 +27,7 @@ hex = "0.4.3"
 rusqlite = { version = "0.32", features = ["bundled"] }
 serde = { version = "1.0.228", features = ["derive"] }
 sha2 = "0.11.0"
+shell-words = "1.1.1"
 sqlparser = "0.62"
 thiserror = "2.0.18"
 toml = "1.1.2"
