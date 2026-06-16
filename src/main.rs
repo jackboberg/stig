@@ -43,6 +43,14 @@ enum Command {
         #[arg(long)]
         yes: bool,
     },
+    /// Restore the database from a reset backup.
+    Restore {
+        /// Timestamp of the reset backup to restore (defaults to most recent)
+        timestamp: Option<String>,
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+    },
     /// Generate code from the current schema.
     Generate {
         /// Name or kind of target to generate (runs all if omitted)
@@ -73,6 +81,7 @@ fn main() {
         Command::Status => stig::cli::status::run(),
         Command::Redo { version, yes } => stig::cli::redo::run(version, yes),
         Command::Reset { yes } => stig::cli::reset::run(yes),
+        Command::Restore { timestamp, yes } => stig::cli::restore::run(timestamp, yes),
         Command::Generate { target_name } => stig::cli::generate::run(target_name),
         Command::Backups { command } => stig::cli::backups::run(command),
         Command::Schema { command } => stig::cli::schema::run(command),
