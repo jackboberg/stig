@@ -371,7 +371,7 @@ fn redo_reapplies_from_middle_of_chain() {
     assert_eq!(count_schema_migrations(&dir), 3);
 }
 
-// Locked DB fails gracefully
+// Locked DB fails with exit code 5.
 #[test]
 fn locked_db_exits_5() {
     let dir = TempDir::new().unwrap();
@@ -383,6 +383,15 @@ fn locked_db_exits_5() {
         "create_users",
         "CREATE TABLE users (id INTEGER);",
     );
+
+    // Switch to DELETE journal mode so reads block on an exclusive writer lock
+    // (the default WAL mode allows concurrent reads while a writer holds the
+    // database lock, which would let `stig status` succeed).
+    std::fs::write(
+        dir.path().join("stig.toml"),
+        "[pragmas]\njournal_mode = \"DELETE\"\n",
+    )
+    .unwrap();
 
     // Open the DB exclusively to lock it.
     let db_path = dir.path().join("app.db");
@@ -397,9 +406,9 @@ fn locked_db_exits_5() {
         .execute_batch("BEGIN EXCLUSIVE; CREATE TABLE IF NOT EXISTS lock_holder (id INTEGER);")
         .unwrap();
 
-    // migrate should fail. SQLite busy errors currently surface as Generic
-    // (exit 1) rather than Locked (exit 5).
-    stig_cmd(&dir).arg("migrate").assert().failure();
+    // Both migrate and status should surface the SQLite lock as exit code 5.
+    stig_cmd(&dir).arg("migrate").assert().code(5);
+    stig_cmd(&dir).arg("status").assert().code(5);
 
     // Clean up: rollback so TempDir cleanup can delete the file.
     _lock.execute_batch("ROLLBACK;").ok();

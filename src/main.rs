@@ -88,7 +88,7 @@ fn main() {
     };
 
     if let Err(e) = result {
-        let cli_err = e.downcast::<CliError>().unwrap_or_else(CliError::Generic);
+        let cli_err = e.downcast::<CliError>().unwrap_or_else(CliError::classify);
         eprintln!("{cli_err}");
         std::process::exit(cli_err.exit_code());
     }
