@@ -65,8 +65,8 @@ fn is_sqlite_locked(err: &rusqlite::Error) -> bool {
     matches!(
         err,
         rusqlite::Error::SqliteFailure(code, _)
-            if code.extended_code == rusqlite::ffi::SQLITE_BUSY
-                || code.extended_code == rusqlite::ffi::SQLITE_LOCKED
+            if code.code == rusqlite::ErrorCode::DatabaseBusy
+                || code.code == rusqlite::ErrorCode::DatabaseLocked
     )
 }
 
