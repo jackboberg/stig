@@ -384,9 +384,11 @@ fn locked_db_exits_5() {
         "CREATE TABLE users (id INTEGER);",
     );
 
-    // Switch to DELETE journal mode so reads block on an exclusive writer lock
-    // (the default WAL mode allows concurrent reads while a writer holds the
-    // database lock, which would let `stig status` succeed).
+    // `init` creates the DB in WAL mode. Overwrite the config so subsequent
+    // stig commands attempt to set `journal_mode = DELETE` during `Db::open`.
+    // That PRAGMA conflicts with the exclusive writer lock held below, causing
+    // both `migrate` and `status` to fail with exit code 5. (Without this
+    // override, WAL mode would allow `status` to read concurrently and succeed.)
     std::fs::write(
         dir.path().join("stig.toml"),
         "[pragmas]\njournal_mode = \"DELETE\"\n",
