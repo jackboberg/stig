@@ -31,10 +31,13 @@ pub enum CliError {
 }
 
 impl CliError {
-    /// Classify an `anyhow::Error` into the appropriate `CliError` variant.
+    /// Classify an unhandled `anyhow::Error` into the appropriate `CliError`
+    /// variant.
     ///
-    /// SQLite busy/locked failures are surfaced as `CliError::Locked`; all
-    /// other errors become `CliError::Generic`.
+    /// This is the single entry point for mapping raw `anyhow::Error`s to
+    /// `CliError` exit-code variants. Currently only SQLite busy/locked failures
+    /// are special-cased (to `CliError::Locked`); everything else becomes
+    /// `CliError::Generic`.
     pub fn classify(err: anyhow::Error) -> Self {
         if let Some(sqlite_err) = err.downcast_ref::<rusqlite::Error>()
             && is_sqlite_locked(sqlite_err)
