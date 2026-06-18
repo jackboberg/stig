@@ -155,14 +155,22 @@ pub fn strip_directive(content: &str) -> String {
 }
 
 /// Check whether `sql` contains explicit transaction statements
-/// (`BEGIN` or `COMMIT`).
+/// (`BEGIN`, `COMMIT`, or `ROLLBACK`).
+///
+/// This is a conservative line-based fallback used only when `sqlparser`
+/// fails to parse the migration. It may false-positive on identifiers that
+/// start with these keywords (e.g. `begin_table`), which is acceptable for a
+/// warning-only code path.
 ///
 /// This is used to warn when a non-transactional migration contains
 /// explicit transaction control, which is likely a mistake.
 fn has_explicit_transaction(sql: &str) -> bool {
     for line in sql.lines() {
         let trimmed = line.trim().to_uppercase();
-        if trimmed.starts_with("BEGIN") || trimmed.starts_with("COMMIT") {
+        if trimmed.starts_with("BEGIN")
+            || trimmed.starts_with("COMMIT")
+            || trimmed.starts_with("ROLLBACK")
+        {
             return true;
         }
     }
@@ -178,17 +186,6 @@ fn has_explicit_transaction(sql: &str) -> bool {
 fn parse_sql_statements(content: &str) -> Option<Vec<Statement>> {
     let sql = strip_directive(content);
     Parser::parse_sql(&SQLiteDialect {}, &sql).ok()
-}
-
-/// Check whether the parsed statements contain explicit transaction control
-/// (`BEGIN`/`COMMIT`).
-fn has_explicit_transaction_stmts(stmts: &[Statement]) -> bool {
-    stmts.iter().any(|s| {
-        matches!(
-            s,
-            Statement::StartTransaction { .. } | Statement::Commit { .. }
-        )
-    })
 }
 
 /// Execute a non-transactional migration, restoring the pre-migration
@@ -295,12 +292,12 @@ fn apply_single_migration(
         let sql = strip_directive(&content);
         let has_tx = stmts.as_ref().map_or_else(
             || has_explicit_transaction(&sql),
-            |s| has_explicit_transaction_stmts(s),
+            |s| s.iter().any(crate::sql::is_transaction_control),
         );
         if has_tx {
             warn!(
                 migration = %filename,
-                "non-transactional migration contains explicit BEGIN/COMMIT statements"
+                "non-transactional migration contains explicit transaction control statements (BEGIN/COMMIT/ROLLBACK/SAVEPOINT)"
             );
         }
         execute_non_transactional(
@@ -625,6 +622,11 @@ mod tests {
         assert!(!has_explicit_transaction(""));
     }
 
+    #[test]
+    fn has_explicit_transaction_detects_rollback() {
+        assert!(has_explicit_transaction("SELECT 1;\nROLLBACK;"));
+    }
+
     // -----------------------------------------------------------------------
     // parse_sql_statements tests
     // -----------------------------------------------------------------------
@@ -699,34 +701,5 @@ mod tests {
     fn parse_invalid_sql_returns_none() {
         // sqlparser may not understand all SQLite syntax; we defer to SQLite.
         assert!(parse_sql_statements("this is not valid sql at all").is_none());
-    }
-
-    // -----------------------------------------------------------------------
-    // has_explicit_transaction_stmts tests
-    // -----------------------------------------------------------------------
-
-    #[test]
-    fn has_explicit_transaction_stmts_detects_begin() {
-        let stmts = parse_sql_statements("BEGIN; SELECT 1; COMMIT;").unwrap();
-        assert!(has_explicit_transaction_stmts(&stmts));
-    }
-
-    #[test]
-    fn has_explicit_transaction_stmts_detects_commit_only() {
-        let stmts = parse_sql_statements("SELECT 1; COMMIT;").unwrap();
-        assert!(has_explicit_transaction_stmts(&stmts));
-    }
-
-    #[test]
-    fn has_explicit_transaction_stmts_no_transaction() {
-        let stmts = parse_sql_statements("SELECT 1; VACUUM;").unwrap();
-        assert!(!has_explicit_transaction_stmts(&stmts));
-    }
-
-    #[test]
-    fn has_explicit_transaction_stmts_empty() {
-        let stmts = parse_sql_statements("").unwrap();
-        assert!(stmts.is_empty());
-        assert!(!has_explicit_transaction_stmts(&stmts));
     }
 }

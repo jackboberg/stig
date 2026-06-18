@@ -6,6 +6,7 @@ pub mod errors;
 pub mod migrate;
 pub mod schema;
 pub mod snapshot;
+pub(crate) mod sql;
 
 /// Compute the lower-case hex-encoded SHA-256 digest of `bytes`.
 ///
