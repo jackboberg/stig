@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `reset` — auto-restores the original database if re-applying migrations fails
 
+### Fixed
+
+- Schema manifest (`schema.sql`) application is now atomic; a failed statement no longer leaves partial DDL/INSERT state
+
 ## [0.1.0] - 2026-06-14
 
 ### Added
