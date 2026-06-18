@@ -155,7 +155,7 @@ pub fn strip_directive(content: &str) -> String {
 }
 
 /// Check whether `sql` contains explicit transaction statements
-/// (`BEGIN`, `COMMIT`, or `ROLLBACK`).
+/// (`BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT`, or `RELEASE SAVEPOINT`).
 ///
 /// This is a conservative line-based fallback used only when `sqlparser`
 /// fails to parse the migration. It may false-positive on identifiers that
@@ -170,6 +170,8 @@ fn has_explicit_transaction(sql: &str) -> bool {
         if trimmed.starts_with("BEGIN")
             || trimmed.starts_with("COMMIT")
             || trimmed.starts_with("ROLLBACK")
+            || trimmed.starts_with("SAVEPOINT")
+            || trimmed.starts_with("RELEASE")
         {
             return true;
         }
@@ -625,6 +627,16 @@ mod tests {
     #[test]
     fn has_explicit_transaction_detects_rollback() {
         assert!(has_explicit_transaction("SELECT 1;\nROLLBACK;"));
+    }
+
+    #[test]
+    fn has_explicit_transaction_detects_savepoint() {
+        assert!(has_explicit_transaction("SAVEPOINT sp1;"));
+    }
+
+    #[test]
+    fn has_explicit_transaction_detects_release_savepoint() {
+        assert!(has_explicit_transaction("RELEASE SAVEPOINT sp1;"));
     }
 
     // -----------------------------------------------------------------------

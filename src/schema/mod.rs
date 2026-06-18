@@ -292,7 +292,9 @@ pub fn apply_schema_manifest(db: &Db, config: &Config) -> Result<usize> {
     }
 
     // Wrap the generated manifest in an explicit transaction so a failed statement cannot leave partial schema/insert state behind.
-    let tx_sql = format!("BEGIN TRANSACTION;\n{sql}\nCOMMIT;");
+    let mut tx_sql = sql;
+    tx_sql.insert_str(0, "BEGIN TRANSACTION;\n");
+    tx_sql.push_str("\nCOMMIT;");
     if let Err(e) = db.connection().execute_batch(&tx_sql) {
         if !db.connection().is_autocommit()
             && let Err(rb_err) = db.connection().execute_batch("ROLLBACK;")
