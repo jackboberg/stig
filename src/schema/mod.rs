@@ -255,8 +255,8 @@ pub fn generate_schema_sql(conn: &Connection, files: &[MigrationFile]) -> Result
 /// (queried from the database after execution).
 ///
 /// Manifests must not contain explicit transaction control (`BEGIN`, `COMMIT`,
-/// `ROLLBACK`, savepoints) or transaction-unsafe `PRAGMA`s, because the whole
-/// file is wrapped in a single transaction.
+/// `ROLLBACK`, savepoints). Transaction-unsafe `PRAGMA`s should also be avoided,
+/// because the whole file is wrapped in a single transaction.
 ///
 /// # Errors
 ///
@@ -293,16 +293,13 @@ pub fn apply_schema_manifest(db: &Db, config: &Config) -> Result<usize> {
 
     // Wrap the generated manifest in an explicit transaction so a failed statement cannot leave partial schema/insert state behind.
     let tx_sql = format!("BEGIN TRANSACTION;\n{sql}\nCOMMIT;");
-    match db.connection().execute_batch(&tx_sql) {
-        Ok(()) => {}
-        Err(e) => {
-            if !db.connection().is_autocommit()
-                && let Err(rb_err) = db.connection().execute_batch("ROLLBACK;")
-            {
-                warn!(error = %rb_err, "failed to rollback aborted schema manifest transaction");
-            }
-            return Err(e).context("failed to execute schema manifest");
+    if let Err(e) = db.connection().execute_batch(&tx_sql) {
+        if !db.connection().is_autocommit()
+            && let Err(rb_err) = db.connection().execute_batch("ROLLBACK;")
+        {
+            warn!(error = %rb_err, "failed to rollback aborted schema manifest transaction");
         }
+        return Err(e).context("failed to execute schema manifest");
     }
 
     let count: i64 = db
