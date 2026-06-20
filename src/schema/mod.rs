@@ -291,17 +291,22 @@ pub fn apply_schema_manifest(db: &Db, config: &Config) -> Result<usize> {
         ));
     }
 
-    // Wrap the generated manifest in an explicit transaction so a failed statement cannot leave partial schema/insert state behind.
-    let mut tx_sql = sql;
-    tx_sql.insert_str(0, "BEGIN TRANSACTION;\n");
-    tx_sql.push_str("\nCOMMIT;");
-    if let Err(e) = db.connection().execute_batch(&tx_sql) {
-        if !db.connection().is_autocommit()
-            && let Err(rb_err) = db.connection().execute_batch("ROLLBACK;")
-        {
+    let conn = db.connection();
+    conn.execute_batch("BEGIN TRANSACTION;")
+        .context("failed to begin schema manifest transaction")?;
+
+    if let Err(e) = conn.execute_batch(&sql) {
+        if let Err(rb_err) = conn.execute_batch("ROLLBACK;") {
             warn!(error = %rb_err, "failed to rollback aborted schema manifest transaction");
         }
         return Err(e).context("failed to execute schema manifest");
+    }
+
+    if let Err(e) = conn.execute_batch("COMMIT;") {
+        if let Err(rb_err) = conn.execute_batch("ROLLBACK;") {
+            warn!(error = %rb_err, "failed to rollback aborted schema manifest transaction");
+        }
+        return Err(e).context("failed to commit schema manifest transaction");
     }
 
     let count: i64 = db
@@ -557,6 +562,11 @@ mod tests {
 
         let result = apply_schema_manifest(&db, &config);
         assert!(result.is_err(), "duplicate CREATE TABLE should fail");
+
+        assert!(
+            db.connection().is_autocommit(),
+            "connection must return to autocommit mode after rollback"
+        );
 
         // Connection must remain usable after rollback.
         let n: i32 = db
