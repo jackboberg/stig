@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased] - ReleaseDate
 
+### Added
+
+- Global CLI flags: `--config`, `--database-path`, `--migrations-dir`, `--backups-dir`, `--schema-path`, `--no-snapshot`, and `--no-checksum`. CLI flags now take precedence over environment variables and `stig.toml` values as documented.
+
 <!-- next-url -->
 [Unreleased]: https://github.com/jackboberg/stig/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/jackboberg/stig/compare/v0.1.0...v0.2.0
