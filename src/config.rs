@@ -73,7 +73,7 @@ pub mod env_source {
     }
 }
 
-use env_source::EnvSource;
+use env_source::{EnvSource, ProcessEnv};
 
 // ---------------------------------------------------------------------------
 // Sub-structs
@@ -159,6 +159,30 @@ pub struct CliOverrides {
     pub auto_snapshot: Option<bool>,
     pub checksum_check: Option<bool>,
     pub schema_path: Option<String>,
+}
+
+/// Runtime context derived from the parsed CLI invocation.
+///
+/// Carries the explicit `--config` path and the parsed CLI overrides so that
+/// individual commands can load configuration with the correct precedence
+/// (CLI flags > environment variables > `stig.toml` > defaults) from a single
+/// call site.
+#[derive(Debug, Default, Clone)]
+pub struct CliContext {
+    /// Explicit config file path from `--config`.
+    pub config_path: Option<PathBuf>,
+    /// Parsed CLI overrides.
+    pub overrides: CliOverrides,
+}
+
+impl CliContext {
+    /// Load configuration using the process environment and then apply any
+    /// CLI overrides carried by this context.
+    pub fn load_config(&self) -> Result<Config, CliError> {
+        let mut config = Config::load(self.config_path.as_deref(), &ProcessEnv, None)?;
+        config.apply_cli_overrides(&self.overrides);
+        Ok(config)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -275,10 +299,13 @@ impl Config {
     /// 2. `stig.toml` values
     /// 3. Built-in defaults
     ///
+    /// CLI flag overrides are applied separately by callers via
+    /// [`Config::apply_cli_overrides`] (or through [`CliContext::load_config`]).
+    ///
     /// # Parameters
     ///
     /// - `override_path`: explicit config file path (e.g. from `--config`).
-    ///   Ignored if `STIG_CONFIG` is set in `env`.
+    ///   Takes precedence over `STIG_CONFIG` when both are set.
     /// - `env`: environment-variable source. Use [`env_source::ProcessEnv`] in production
     ///   to read the real process environment; use [`env_source::MapEnv`] in tests for
     ///   full isolation (structurally cannot read `std::env`).
@@ -394,8 +421,8 @@ impl Config {
     // -----------------------------------------------------------------------
 
     /// Resolve the path to the config file using the precedence:
-    /// 1. `STIG_CONFIG` env var
-    /// 2. `override_path` argument
+    /// 1. `override_path` argument (e.g. `--config`)
+    /// 2. `STIG_CONFIG` env var
     /// 3. Upward search from `start_dir` (or CWD) for `stig.toml`
     ///
     /// Returns `None` if no config file is found (not an error).
@@ -404,16 +431,16 @@ impl Config {
         env: &E,
         start_dir: Option<&Path>,
     ) -> Option<PathBuf> {
-        // 1. STIG_CONFIG env var — always passed through so the caller gets a
+        // 1. Explicit override path — CLI flags beat environment variables.
+        if let Some(p) = override_path {
+            return Some(p.to_path_buf());
+        }
+
+        // 2. STIG_CONFIG env var — always passed through so the caller gets a
         // clear IO error if the file doesn't exist rather than silently falling
         // back to defaults.
         if let Some(p) = env.get_var("STIG_CONFIG") {
             return Some(PathBuf::from(p));
-        }
-
-        // 2. Explicit override path.
-        if let Some(p) = override_path {
-            return Some(p.to_path_buf());
         }
 
         // 3. Upward search from start_dir (or CWD).
@@ -836,11 +863,11 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn stig_config_env_var_used_over_override_path() {
+    fn override_path_takes_priority_over_stig_config_env() {
         // File A: via STIG_CONFIG
         let fa = temp_toml(r#"database_path = "from_stig_config.db""#);
 
-        // File B: via override_path argument (should be ignored)
+        // File B: via override_path argument (should win)
         let fb = temp_toml(r#"database_path = "from_override.db""#);
 
         let env = MapEnv(
@@ -852,7 +879,7 @@ mod tests {
         );
 
         let cfg = Config::load(Some(fb.path()), &env, None).unwrap();
-        assert_eq!(cfg.database_path, "from_stig_config.db");
+        assert_eq!(cfg.database_path, "from_override.db");
     }
 
     // -----------------------------------------------------------------------
