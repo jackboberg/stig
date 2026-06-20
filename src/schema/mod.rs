@@ -296,14 +296,18 @@ pub fn apply_schema_manifest(db: &Db, config: &Config) -> Result<usize> {
         .context("failed to begin schema manifest transaction")?;
 
     if let Err(e) = conn.execute_batch(&sql) {
-        if let Err(rb_err) = conn.execute_batch("ROLLBACK;") {
+        if !conn.is_autocommit()
+            && let Err(rb_err) = conn.execute_batch("ROLLBACK;")
+        {
             warn!(error = %rb_err, "failed to rollback aborted schema manifest transaction");
         }
         return Err(e).context("failed to execute schema manifest");
     }
 
     if let Err(e) = conn.execute_batch("COMMIT;") {
-        if let Err(rb_err) = conn.execute_batch("ROLLBACK;") {
+        if !conn.is_autocommit()
+            && let Err(rb_err) = conn.execute_batch("ROLLBACK;")
+        {
             warn!(error = %rb_err, "failed to rollback aborted schema manifest transaction");
         }
         return Err(e).context("failed to commit schema manifest transaction");
