@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 
-use crate::config::Config;
-use crate::config::env_source::ProcessEnv;
+use crate::config::CliContext;
 use crate::db::{Db, ensure_schema_migrations, format_drift_messages};
 use crate::errors::CliError;
 use crate::migrate::discover::discover;
@@ -9,8 +8,8 @@ use crate::migrate::plan::{MigrationStatus, Plan};
 use crate::snapshot;
 
 /// Run `stig status`.
-pub fn run() -> Result<()> {
-    let config = Config::load(None, &ProcessEnv, None)?;
+pub fn run(ctx: &CliContext) -> Result<()> {
+    let config = ctx.load_config()?;
     let project_root = &config.project_root;
 
     let migrations_dir = project_root.join(&config.migrations_dir);

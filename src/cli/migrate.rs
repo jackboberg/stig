@@ -1,7 +1,6 @@
 use anyhow::Context;
 
-use crate::config::Config;
-use crate::config::env_source::ProcessEnv;
+use crate::config::CliContext;
 use crate::db::{Db, ensure_schema_migrations, format_drift_messages};
 use crate::errors::CliError;
 use crate::migrate::apply;
@@ -10,8 +9,8 @@ use crate::migrate::plan::Plan;
 use crate::schema;
 
 /// Run `stig migrate`.
-pub fn run(dry_run: bool) -> anyhow::Result<()> {
-    let config = Config::load(None, &ProcessEnv, None)?;
+pub fn run(dry_run: bool, ctx: &CliContext) -> anyhow::Result<()> {
+    let config = ctx.load_config()?;
     let project_root = &config.project_root;
 
     let migrations_dir = project_root.join(&config.migrations_dir);

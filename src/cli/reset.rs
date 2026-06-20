@@ -2,8 +2,7 @@ use std::path::Path;
 
 use anyhow::Context;
 
-use crate::config::Config;
-use crate::config::env_source::ProcessEnv;
+use crate::config::{CliContext, Config};
 use crate::db::{Db, ensure_schema_migrations};
 use crate::errors::CliError;
 use crate::migrate::apply;
@@ -13,8 +12,8 @@ use crate::schema;
 use crate::snapshot;
 
 /// Run `stig reset [--yes]`.
-pub fn run(yes: bool) -> anyhow::Result<()> {
-    let config = Config::load(None, &ProcessEnv, None)?;
+pub fn run(yes: bool, ctx: &CliContext) -> anyhow::Result<()> {
+    let config = ctx.load_config()?;
 
     let migrations_dir = config.project_root.join(&config.migrations_dir);
     if !migrations_dir.is_dir() {

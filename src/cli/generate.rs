@@ -2,14 +2,13 @@ use anyhow::{Context, Result};
 use tracing::info;
 
 use crate::codegen;
-use crate::config::Config;
-use crate::config::env_source::ProcessEnv;
+use crate::config::CliContext;
 use crate::db::Db;
 use crate::errors::CliError;
 
 /// Run `stig generate [target-name]`.
-pub fn run(target_name: Option<String>) -> Result<()> {
-    let config = Config::load(None, &ProcessEnv, None)?;
+pub fn run(target_name: Option<String>, ctx: &CliContext) -> Result<()> {
+    let config = ctx.load_config()?;
 
     if config.generate.is_empty() {
         info!("no codegen targets configured");

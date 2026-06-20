@@ -3,21 +3,20 @@ use std::time::Duration;
 use anyhow::Context;
 
 use crate::cli::BackupsCommand;
-use crate::config::Config;
-use crate::config::env_source::ProcessEnv;
+use crate::config::CliContext;
 use crate::errors::CliError;
 use crate::snapshot;
 
 /// Run `stig backups <subcommand>`.
-pub fn run(command: BackupsCommand) -> anyhow::Result<()> {
+pub fn run(command: BackupsCommand, ctx: &CliContext) -> anyhow::Result<()> {
     match command {
-        BackupsCommand::List => list(),
-        BackupsCommand::Prune { yes } => prune(yes),
+        BackupsCommand::List => list(ctx),
+        BackupsCommand::Prune { yes } => prune(yes, ctx),
     }
 }
 
-fn list() -> anyhow::Result<()> {
-    let config = Config::load(None, &ProcessEnv, None)?;
+fn list(ctx: &CliContext) -> anyhow::Result<()> {
+    let config = ctx.load_config()?;
 
     let backups_dir = config.project_root.join(&config.backups_dir);
     let snapshots_dir = backups_dir.join("snapshots");
@@ -54,8 +53,8 @@ fn list() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn prune(yes: bool) -> anyhow::Result<()> {
-    let config = Config::load(None, &ProcessEnv, None)?;
+fn prune(yes: bool, ctx: &CliContext) -> anyhow::Result<()> {
+    let config = ctx.load_config()?;
 
     confirm_or_abort(yes)?;
 

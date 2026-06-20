@@ -1,18 +1,17 @@
 use anyhow::Context;
 
 use crate::cli::SchemaCommand;
-use crate::config::Config;
-use crate::config::env_source::ProcessEnv;
+use crate::config::CliContext;
 use crate::db::{Db, ensure_schema_migrations};
 use crate::errors::CliError;
 use crate::migrate::discover::discover;
 use crate::schema::diff;
 
 /// Run `stig schema diff`.
-pub fn run(command: SchemaCommand) -> anyhow::Result<()> {
+pub fn run(command: SchemaCommand, ctx: &CliContext) -> anyhow::Result<()> {
     let SchemaCommand::Diff { output } = command;
 
-    let config = Config::load(None, &ProcessEnv, None)?;
+    let config = ctx.load_config()?;
     let project_root = &config.project_root;
 
     let migrations_dir = project_root.join(&config.migrations_dir);

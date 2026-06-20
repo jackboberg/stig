@@ -12,27 +12,29 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Context as _;
 
-use crate::config::Config;
 use crate::config::env_source::ProcessEnv;
+use crate::config::{CliContext, Config};
 use crate::db::Db;
 use crate::errors::CliError;
 use crate::schema;
 
 /// Run `stig init`.
 ///
-/// Exits with code 2 if a `stig.toml` already exists (found via upward search
-/// from CWD). Otherwise writes a default `stig.toml` to CWD, creates
-/// directory scaffolding, and bootstraps the database.
-pub fn run() -> anyhow::Result<()> {
-    guard_no_existing_config()?;
+/// Exits with code 2 if the target `stig.toml` already exists. Otherwise
+/// writes a default `stig.toml`, creates directory scaffolding, and
+/// bootstraps the database. CLI overrides are applied to the default config
+/// before writing.
+pub fn run(ctx: &CliContext) -> anyhow::Result<()> {
+    guard_no_existing_config(ctx)?;
 
-    let project_root = current_dir()?;
-    let config = Config {
+    let (config_path, project_root) = resolve_init_paths(ctx)?;
+    let mut config = Config {
         project_root: project_root.clone(),
         ..Config::default()
     };
+    config.apply_cli_overrides(&ctx.overrides);
 
-    write_config(&config, &project_root)?;
+    write_config(&config, &config_path, &project_root)?;
     create_migrations_dir(&config, &project_root)?;
     create_backups_dir(&config, &project_root)?;
     create_schema_manifest(&config)?;
@@ -41,13 +43,48 @@ pub fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Return an error (exit 2) if a `stig.toml` already exists anywhere in the
-/// upward search path from CWD.
-fn guard_no_existing_config() -> anyhow::Result<()> {
-    if let Some(existing) = Config::resolve_config_path(None, &ProcessEnv, None) {
+/// Return an error (exit 2) if the target config file already exists.
+fn guard_no_existing_config(ctx: &CliContext) -> anyhow::Result<()> {
+    if let Some(ref target) = ctx.config_path {
+        let path = current_dir()?.join(target);
+        if path.is_file() {
+            return Err(CliError::Usage(format!("{} already exists", path.display())).into());
+        }
+    } else if let Some(existing) = Config::resolve_config_path(None, &ProcessEnv, None) {
         return Err(CliError::Usage(format!("{} already exists", existing.display())).into());
     }
     Ok(())
+}
+
+/// Resolve the target config path and project root for `stig init`.
+///
+/// - If `--config` was passed, the config file is created at that path and the
+///   project root is its parent directory (resolved against CWD).
+/// - Otherwise the config file is `<cwd>/stig.toml` and the project root is
+///   the current working directory.
+fn resolve_init_paths(ctx: &CliContext) -> anyhow::Result<(PathBuf, PathBuf)> {
+    let cwd = current_dir()?;
+    let (config_path, project_root) = match &ctx.config_path {
+        Some(target) => {
+            let path = cwd.join(target);
+            let root = path
+                .parent()
+                .map(|p| {
+                    if p.as_os_str().is_empty() {
+                        cwd.clone()
+                    } else {
+                        p.to_path_buf()
+                    }
+                })
+                .unwrap_or_else(|| cwd.clone());
+            (path, root)
+        }
+        None => {
+            let path = cwd.join("stig.toml");
+            (path, cwd)
+        }
+    };
+    Ok((config_path, project_root))
 }
 
 /// Return the current working directory, or a usage error if it cannot be
@@ -57,11 +94,19 @@ fn current_dir() -> anyhow::Result<PathBuf> {
         .map_err(|e| CliError::Usage(format!("cannot determine current directory: {e}")).into())
 }
 
-/// Serialise `config` to `<project_root>/stig.toml`.
-fn write_config(config: &Config, project_root: &Path) -> anyhow::Result<()> {
-    let toml_path = project_root.join("stig.toml");
-    config.write(&toml_path)?;
-    println!("✓ wrote stig.toml");
+/// Serialise `config` to `config_path`, creating its parent directory if
+/// necessary. Prints a path relative to `project_root` when possible.
+fn write_config(config: &Config, config_path: &Path, project_root: &Path) -> anyhow::Result<()> {
+    if let Some(parent) = config_path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("failed to create {}", parent.display()))?;
+    }
+    config.write(config_path)?;
+    let display = config_path
+        .strip_prefix(project_root)
+        .unwrap_or(config_path)
+        .display();
+    println!("✓ wrote {display}");
     Ok(())
 }
 
