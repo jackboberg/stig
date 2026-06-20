@@ -240,22 +240,14 @@ TBD - need to hash out a bit more of this process.
 ### Process
 
 1. Ensure all CI checks pass on `main`.
-2. Move entries from `[Unreleased]` in `CHANGELOG.md` under a new version header:
-   ```markdown
-   ## [Unreleased]
-
-   ## [0.2.0] - YYYY-MM-DD
-
-   ### Added
-   - New feature description
-   ```
-   Use `YYYY-MM-DD` as the date placeholder — cargo-release will fill in the actual date.
+2. Add changelog entries under `## [Unreleased] - ReleaseDate` in `CHANGELOG.md` as work is merged.
 3. Run cargo-release:
    ```sh
    cargo release 0.2.0 --execute
    ```
    This will:
-   - Replace the `YYYY-MM-DD` placeholder with today's date in `CHANGELOG.md`
+   - Rename `## [Unreleased]` to `## [0.2.0] - <date>` in `CHANGELOG.md`
+   - Insert a fresh `## [Unreleased] - ReleaseDate` section above it
    - Bump the version in `Cargo.toml` and `Cargo.lock`
    - Commit with message `chore: release v0.2.0`
    - Create annotated tag `v0.2.0`
