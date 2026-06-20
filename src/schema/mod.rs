@@ -13,6 +13,8 @@ use rusqlite::Connection;
 use sqlparser::dialect::SQLiteDialect;
 use sqlparser::parser::Parser;
 
+use tracing::warn;
+
 use crate::config::Config;
 use crate::db::Db;
 use crate::migrate::discover::MigrationFile;
@@ -248,13 +250,18 @@ pub fn generate_schema_sql(conn: &Connection, files: &[MigrationFile]) -> Result
 /// Apply the schema manifest to a fresh database.
 ///
 /// The manifest is a self-contained SQL file that includes both DDL statements
-/// and `INSERT INTO schema_migrations` rows. The entire file is executed as a
-/// single batch. Returns the number of migrations recorded (queried from the
-/// database after execution).
+/// and `INSERT INTO schema_migrations` rows. The entire file is executed
+/// inside an explicit transaction. Returns the number of migrations recorded
+/// (queried from the database after execution).
+///
+/// Manifests must not contain explicit transaction control (`BEGIN`, `COMMIT`,
+/// `ROLLBACK`, savepoints). Transaction-unsafe `PRAGMA`s should also be avoided,
+/// because the whole file is wrapped in a single transaction.
 ///
 /// # Errors
 ///
-/// Returns an error if the manifest file is missing or contains no statements.
+/// Returns an error if the manifest file is missing, contains no statements, or
+/// contains explicit transaction control statements.
 pub fn apply_schema_manifest(db: &Db, config: &Config) -> Result<usize> {
     let sql = load_schema_sql(config)?.ok_or_else(|| {
         anyhow::anyhow!(
@@ -270,6 +277,13 @@ pub fn apply_schema_manifest(db: &Db, config: &Config) -> Result<usize> {
         )
     })?;
 
+    if stmts.iter().any(crate::sql::is_transaction_control) {
+        return Err(anyhow::anyhow!(
+            "schema manifest must not contain explicit transaction control statements: {}",
+            schema_path(config).display()
+        ));
+    }
+
     if !stmts.iter().any(is_schema_creating_statement) {
         return Err(anyhow::anyhow!(
             "schema manifest has no DDL content: {}",
@@ -277,9 +291,27 @@ pub fn apply_schema_manifest(db: &Db, config: &Config) -> Result<usize> {
         ));
     }
 
-    db.connection()
-        .execute_batch(&sql)
-        .context("failed to execute schema manifest")?;
+    let conn = db.connection();
+    conn.execute_batch("BEGIN TRANSACTION;")
+        .context("failed to begin schema manifest transaction")?;
+
+    if let Err(e) = conn.execute_batch(&sql) {
+        if !conn.is_autocommit()
+            && let Err(rb_err) = conn.execute_batch("ROLLBACK;")
+        {
+            warn!(error = %rb_err, "failed to rollback aborted schema manifest transaction");
+        }
+        return Err(e).context("failed to execute schema manifest");
+    }
+
+    if let Err(e) = conn.execute_batch("COMMIT;") {
+        if !conn.is_autocommit()
+            && let Err(rb_err) = conn.execute_batch("ROLLBACK;")
+        {
+            warn!(error = %rb_err, "failed to rollback aborted schema manifest transaction");
+        }
+        return Err(e).context("failed to commit schema manifest transaction");
+    }
 
     let count: i64 = db
         .connection()
@@ -509,6 +541,104 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
             .unwrap();
         assert_eq!(migration_count, 1);
+    }
+
+    #[test]
+    fn apply_schema_manifest_rolls_back_on_failure() {
+        let dir = TempDir::new().unwrap();
+        let config = Config {
+            project_root: dir.path().to_path_buf(),
+            schema_path: "db/schema.sql".to_string(),
+            database_path: "app.db".to_string(),
+            ..Config::default()
+        };
+
+        // Manifest has a successful DDL, a successful insert, then a failing duplicate DDL.
+        let content = format!(
+            "{}\nCREATE TABLE foo (id INTEGER PRIMARY KEY);\nINSERT INTO schema_migrations (version, checksum) VALUES ('20240101000000_test', 'abc123');\nCREATE TABLE foo (id INTEGER PRIMARY KEY);",
+            HEADER
+        );
+        std::fs::create_dir_all(dir.path().join("db")).unwrap();
+        std::fs::write(schema_path(&config), content).unwrap();
+
+        let db = Db::open(&config).unwrap();
+        crate::db::ensure_schema_migrations(db.connection()).unwrap();
+
+        let result = apply_schema_manifest(&db, &config);
+        assert!(result.is_err(), "duplicate CREATE TABLE should fail");
+
+        assert!(
+            db.connection().is_autocommit(),
+            "connection must return to autocommit mode after rollback"
+        );
+
+        // Connection must remain usable after rollback.
+        let n: i32 = db
+            .connection()
+            .query_row("SELECT 1", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(n, 1);
+
+        db.close().unwrap();
+
+        // Reopen to verify nothing was persisted to disk.
+        let db_path = dir.path().join("app.db");
+        let conn = Connection::open(&db_path).unwrap();
+
+        let table_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='foo'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(table_count, 0, "partial DDL must be rolled back");
+
+        let migration_count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            migration_count, 0,
+            "partial migration inserts must be rolled back"
+        );
+    }
+
+    #[test]
+    fn apply_schema_manifest_rejects_explicit_transaction_control() {
+        let dir = TempDir::new().unwrap();
+        let config = Config {
+            project_root: dir.path().to_path_buf(),
+            schema_path: "db/schema.sql".to_string(),
+            database_path: "app.db".to_string(),
+            ..Config::default()
+        };
+
+        std::fs::create_dir_all(dir.path().join("db")).unwrap();
+        for manifest in [
+            format!(
+                "{}\nBEGIN;\nCREATE TABLE foo (id INTEGER PRIMARY KEY);\nCOMMIT;",
+                HEADER
+            ),
+            format!(
+                "{}\nCREATE TABLE foo (id INTEGER PRIMARY KEY);\nROLLBACK;",
+                HEADER
+            ),
+        ] {
+            std::fs::write(schema_path(&config), manifest).unwrap();
+
+            let db = Db::open(&config).unwrap();
+            let result = apply_schema_manifest(&db, &config);
+            assert!(
+                result.is_err(),
+                "manifest with transaction control should fail"
+            );
+            let err = result.unwrap_err().to_string();
+            assert!(
+                err.contains("transaction control"),
+                "expected error to mention transaction control, got: {err}"
+            );
+            db.close().unwrap();
+        }
     }
 
     #[test]
