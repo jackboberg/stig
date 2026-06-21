@@ -118,30 +118,29 @@ fn main() {
         overrides: cli_overrides(&cli),
     };
 
-    let result: Result<(), anyhow::Error> = (|| match cli.command {
-        Command::Init => stig::cli::init::run(&ctx),
-        _ => {
-            // Load config only for non-init commands: `stig init --config <path>`
-            // targets a file that does not exist yet, so Config::load would fail
-            // before init has a chance to create it.
-            let config = ctx.load_config()?;
-            match cli.command {
-                Command::Init => unreachable!(),
-                Command::New {
-                    description,
-                    no_edit,
-                } => stig::cli::new::run(description, no_edit, &config),
-                Command::Migrate { dry_run } => stig::cli::migrate::run(dry_run, &config),
-                Command::Status => stig::cli::status::run(&config),
-                Command::Redo { version, yes } => stig::cli::redo::run(version, yes, &config),
-                Command::Reset { yes } => stig::cli::reset::run(yes, &config),
-                Command::Restore { timestamp, yes } => {
-                    stig::cli::restore::run(timestamp, yes, &config)
-                }
-                Command::Generate { target_name } => stig::cli::generate::run(target_name, &config),
-                Command::Backups { command } => stig::cli::backups::run(command, &config),
-                Command::Schema { command } => stig::cli::schema::run(command, &config),
-            }
+    let result: Result<(), anyhow::Error> = (|| {
+        if matches!(cli.command, Command::Init) {
+            return stig::cli::init::run(&ctx);
+        }
+
+        // Load config only for non-init commands: `stig init --config <path>`
+        // targets a file that does not exist yet, so Config::load would fail
+        // before init has a chance to create it.
+        let config = ctx.load_config()?;
+        match cli.command {
+            Command::Init => unreachable!("init is handled above"),
+            Command::New {
+                description,
+                no_edit,
+            } => stig::cli::new::run(description, no_edit, &config),
+            Command::Migrate { dry_run } => stig::cli::migrate::run(dry_run, &config),
+            Command::Status => stig::cli::status::run(&config),
+            Command::Redo { version, yes } => stig::cli::redo::run(version, yes, &config),
+            Command::Reset { yes } => stig::cli::reset::run(yes, &config),
+            Command::Restore { timestamp, yes } => stig::cli::restore::run(timestamp, yes, &config),
+            Command::Generate { target_name } => stig::cli::generate::run(target_name, &config),
+            Command::Backups { command } => stig::cli::backups::run(command, &config),
+            Command::Schema { command } => stig::cli::schema::run(command, &config),
         }
     })();
 
