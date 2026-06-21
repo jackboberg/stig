@@ -541,8 +541,19 @@ fn prune_dir(dir: &Path, prefix: &str, keep: u32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::{ConfigFile, Runtime};
     use filetime::FileTime;
     use tempfile::TempDir;
+
+    fn make_config(dir: &TempDir) -> Runtime {
+        Runtime {
+            project_root: dir.path().to_path_buf(),
+            file: ConfigFile {
+                backups_dir: ".".into(),
+                ..ConfigFile::default()
+            },
+        }
+    }
 
     /// Write a file with known content and return its path.
     fn write_file(dir: &Path, name: &str, content: &[u8]) -> PathBuf {
@@ -581,8 +592,10 @@ mod tests {
     #[test]
     fn take_snapshot_copies_main_file() {
         let dir = TempDir::new().unwrap();
-        let db = write_file(dir.path(), "app.db", b"dbcontent");
-        let snaps = dir.path().join("snapshots");
+        let config = make_config(&dir);
+        let db = config.db_path();
+        std::fs::write(&db, b"dbcontent").unwrap();
+        let snaps = config.snapshots_path();
         std::fs::create_dir(&snaps).unwrap();
 
         take_snapshot("20240101000000_alpha", &db, &snaps).unwrap();
@@ -593,10 +606,12 @@ mod tests {
     #[test]
     fn take_snapshot_copies_sidecars_when_present() {
         let dir = TempDir::new().unwrap();
-        let db = write_file(dir.path(), "app.db", b"db");
-        write_file(dir.path(), "app.db-wal", b"wal");
-        write_file(dir.path(), "app.db-shm", b"shm");
-        let snaps = dir.path().join("snapshots");
+        let config = make_config(&dir);
+        let db = config.db_path();
+        std::fs::write(&db, b"db").unwrap();
+        std::fs::write(dir.path().join("app.db-wal"), b"wal").unwrap();
+        std::fs::write(dir.path().join("app.db-shm"), b"shm").unwrap();
+        let snaps = config.snapshots_path();
         std::fs::create_dir(&snaps).unwrap();
 
         take_snapshot("20240101000000_v", &db, &snaps).unwrap();
@@ -609,8 +624,10 @@ mod tests {
     #[test]
     fn take_snapshot_succeeds_without_sidecars() {
         let dir = TempDir::new().unwrap();
-        let db = write_file(dir.path(), "app.db", b"db");
-        let snaps = dir.path().join("snapshots");
+        let config = make_config(&dir);
+        let db = config.db_path();
+        std::fs::write(&db, b"db").unwrap();
+        let snaps = config.snapshots_path();
         std::fs::create_dir(&snaps).unwrap();
 
         // No -wal or -shm files — should not error.
@@ -642,8 +659,10 @@ mod tests {
     #[test]
     fn restore_snapshot_round_trips_content() {
         let dir = TempDir::new().unwrap();
-        let db = write_file(dir.path(), "app.db", b"original");
-        let snaps = dir.path().join("snapshots");
+        let config = make_config(&dir);
+        let db = config.db_path();
+        std::fs::write(&db, b"original").unwrap();
+        let snaps = config.snapshots_path();
         std::fs::create_dir(&snaps).unwrap();
 
         // Take a snapshot, then overwrite the live DB with different content.
@@ -658,10 +677,12 @@ mod tests {
     #[test]
     fn restore_snapshot_restores_sidecars() {
         let dir = TempDir::new().unwrap();
-        let db = write_file(dir.path(), "app.db", b"db");
-        write_file(dir.path(), "app.db-wal", b"wal-before");
-        write_file(dir.path(), "app.db-shm", b"shm-before");
-        let snaps = dir.path().join("snapshots");
+        let config = make_config(&dir);
+        let db = config.db_path();
+        std::fs::write(&db, b"db").unwrap();
+        std::fs::write(dir.path().join("app.db-wal"), b"wal-before").unwrap();
+        std::fs::write(dir.path().join("app.db-shm"), b"shm-before").unwrap();
+        let snaps = config.snapshots_path();
         std::fs::create_dir(&snaps).unwrap();
 
         take_snapshot("20240101000000_v", &db, &snaps).unwrap();
@@ -679,8 +700,10 @@ mod tests {
     #[test]
     fn restore_snapshot_errors_when_snapshot_missing() {
         let dir = TempDir::new().unwrap();
-        let db = write_file(dir.path(), "app.db", b"live");
-        let snaps = dir.path().join("snapshots");
+        let config = make_config(&dir);
+        let db = config.db_path();
+        std::fs::write(&db, b"live").unwrap();
+        let snaps = config.snapshots_path();
         std::fs::create_dir(&snaps).unwrap();
 
         let result = restore_snapshot("20240101000000_missing", &db, &snaps);
@@ -700,8 +723,10 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = TempDir::new().unwrap();
-        let db = write_file(dir.path(), "app.db", b"safe");
-        let snaps = dir.path().join("snapshots");
+        let config = make_config(&dir);
+        let db = config.db_path();
+        std::fs::write(&db, b"safe").unwrap();
+        let snaps = config.snapshots_path();
         std::fs::create_dir(&snaps).unwrap();
 
         take_snapshot("20240101000000_v", &db, &snaps).unwrap();
@@ -735,8 +760,10 @@ mod tests {
     #[test]
     fn snapshot_exists_returns_true_when_present() {
         let dir = TempDir::new().unwrap();
-        let db = write_file(dir.path(), "app.db", b"db");
-        let snaps = dir.path().join("snapshots");
+        let config = make_config(&dir);
+        let db = config.db_path();
+        std::fs::write(&db, b"db").unwrap();
+        let snaps = config.snapshots_path();
         std::fs::create_dir(&snaps).unwrap();
 
         take_snapshot("20240101000000_v", &db, &snaps).unwrap();
@@ -747,7 +774,8 @@ mod tests {
     #[test]
     fn snapshot_exists_returns_false_when_absent() {
         let dir = TempDir::new().unwrap();
-        let snaps = dir.path().join("snapshots");
+        let config = make_config(&dir);
+        let snaps = config.snapshots_path();
         std::fs::create_dir(&snaps).unwrap();
 
         assert!(!snapshot_exists("20240101000000_v", &snaps));
@@ -760,7 +788,8 @@ mod tests {
     #[test]
     fn prune_snapshots_keeps_newest_n() {
         let dir = TempDir::new().unwrap();
-        let snaps = dir.path().join("snapshots");
+        let config = make_config(&dir);
+        let snaps = config.snapshots_path();
         std::fs::create_dir(&snaps).unwrap();
 
         for i in 1u8..=5 {
@@ -783,7 +812,8 @@ mod tests {
     #[test]
     fn prune_snapshots_deletes_sidecars() {
         let dir = TempDir::new().unwrap();
-        let snaps = dir.path().join("snapshots");
+        let config = make_config(&dir);
+        let snaps = config.snapshots_path();
         std::fs::create_dir(&snaps).unwrap();
 
         // Create 2 snapshots, the older one has sidecars.
@@ -804,7 +834,8 @@ mod tests {
     #[test]
     fn prune_snapshots_noop_when_count_within_keep() {
         let dir = TempDir::new().unwrap();
-        let snaps = dir.path().join("snapshots");
+        let config = make_config(&dir);
+        let snaps = config.snapshots_path();
         std::fs::create_dir(&snaps).unwrap();
 
         write_file(&snaps, "pre-20240101000001_a.db", b"a");
@@ -823,8 +854,10 @@ mod tests {
     #[test]
     fn take_reset_backup_moves_db_to_resets_dir() {
         let dir = TempDir::new().unwrap();
-        let db = write_file(dir.path(), "app.db", b"live");
-        let resets = dir.path().join("resets");
+        let config = make_config(&dir);
+        let db = config.db_path();
+        std::fs::write(&db, b"live").unwrap();
+        let resets = config.resets_path();
         std::fs::create_dir(&resets).unwrap();
 
         let clock = fake_clock(1_700_000_000);
@@ -845,10 +878,12 @@ mod tests {
     #[test]
     fn take_reset_backup_moves_sidecars() {
         let dir = TempDir::new().unwrap();
-        let db = write_file(dir.path(), "app.db", b"db");
-        write_file(dir.path(), "app.db-wal", b"wal");
-        write_file(dir.path(), "app.db-shm", b"shm");
-        let resets = dir.path().join("resets");
+        let config = make_config(&dir);
+        let db = config.db_path();
+        std::fs::write(&db, b"db").unwrap();
+        std::fs::write(dir.path().join("app.db-wal"), b"wal").unwrap();
+        std::fs::write(dir.path().join("app.db-shm"), b"shm").unwrap();
+        let resets = config.resets_path();
         std::fs::create_dir(&resets).unwrap();
 
         let clock = fake_clock(1_700_000_000);
@@ -870,8 +905,10 @@ mod tests {
     #[test]
     fn take_reset_backup_returns_path_of_reset_file() {
         let dir = TempDir::new().unwrap();
-        let db = write_file(dir.path(), "app.db", b"db");
-        let resets = dir.path().join("resets");
+        let config = make_config(&dir);
+        let db = config.db_path();
+        std::fs::write(&db, b"db").unwrap();
+        let resets = config.resets_path();
         std::fs::create_dir(&resets).unwrap();
 
         let clock = fake_clock(1_700_000_000);
@@ -889,8 +926,10 @@ mod tests {
     #[test]
     fn take_reset_backup_name_contains_timestamp() {
         let dir = TempDir::new().unwrap();
-        let db = write_file(dir.path(), "app.db", b"db");
-        let resets = dir.path().join("resets");
+        let config = make_config(&dir);
+        let db = config.db_path();
+        std::fs::write(&db, b"db").unwrap();
+        let resets = config.resets_path();
         std::fs::create_dir(&resets).unwrap();
 
         let clock = frozen_clock(1_700_000_000);
@@ -911,7 +950,8 @@ mod tests {
     #[test]
     fn take_reset_backup_errors_on_timestamp_collision() {
         let dir = TempDir::new().unwrap();
-        let resets = dir.path().join("resets");
+        let config = make_config(&dir);
+        let resets = config.resets_path();
         std::fs::create_dir(&resets).unwrap();
 
         // Use a frozen clock so both calls produce the same destination path.
@@ -935,8 +975,10 @@ mod tests {
     #[test]
     fn take_reset_backup_uses_clock_for_timestamp() {
         let dir = TempDir::new().unwrap();
-        let db = write_file(dir.path(), "app.db", b"db");
-        let resets = dir.path().join("resets");
+        let config = make_config(&dir);
+        let db = config.db_path();
+        std::fs::write(&db, b"db").unwrap();
+        let resets = config.resets_path();
         std::fs::create_dir(&resets).unwrap();
 
         let clock = fake_clock(1_700_000_000);
@@ -960,7 +1002,8 @@ mod tests {
     #[test]
     fn prune_resets_keeps_newest_n() {
         let dir = TempDir::new().unwrap();
-        let resets = dir.path().join("resets");
+        let config = make_config(&dir);
+        let resets = config.resets_path();
         std::fs::create_dir(&resets).unwrap();
 
         for i in 1u8..=4 {
@@ -986,8 +1029,10 @@ mod tests {
     #[test]
     fn restore_reset_backup_round_trips_content() {
         let dir = TempDir::new().unwrap();
-        let db = write_file(dir.path(), "app.db", b"original");
-        let resets = dir.path().join("resets");
+        let config = make_config(&dir);
+        let db = config.db_path();
+        std::fs::write(&db, b"original").unwrap();
+        let resets = config.resets_path();
         std::fs::create_dir(&resets).unwrap();
 
         // Simulate a reset backup: the content that was moved away.
@@ -1004,8 +1049,10 @@ mod tests {
     #[test]
     fn restore_reset_backup_restores_sidecars() {
         let dir = TempDir::new().unwrap();
-        let db = write_file(dir.path(), "app.db", b"db");
-        let resets = dir.path().join("resets");
+        let config = make_config(&dir);
+        let db = config.db_path();
+        std::fs::write(&db, b"db").unwrap();
+        let resets = config.resets_path();
         std::fs::create_dir(&resets).unwrap();
 
         write_file(&resets, "reset-20240101T000000Z.db", b"db-backup");
@@ -1026,8 +1073,10 @@ mod tests {
     #[test]
     fn restore_reset_backup_removes_destination_journal() {
         let dir = TempDir::new().unwrap();
-        let db = write_file(dir.path(), "app.db", b"db");
-        let resets = dir.path().join("resets");
+        let config = make_config(&dir);
+        let db = config.db_path();
+        std::fs::write(&db, b"db").unwrap();
+        let resets = config.resets_path();
         std::fs::create_dir(&resets).unwrap();
 
         write_file(&resets, "reset-20240101T000000Z.db", b"db-backup");
@@ -1044,8 +1093,10 @@ mod tests {
     #[test]
     fn restore_reset_backup_picks_most_recent() {
         let dir = TempDir::new().unwrap();
-        let db = write_file(dir.path(), "app.db", b"partial");
-        let resets = dir.path().join("resets");
+        let config = make_config(&dir);
+        let db = config.db_path();
+        std::fs::write(&db, b"partial").unwrap();
+        let resets = config.resets_path();
         std::fs::create_dir(&resets).unwrap();
 
         // Two reset backups; filename ordering determines recency.
@@ -1060,8 +1111,10 @@ mod tests {
     #[test]
     fn restore_reset_backup_errors_when_no_backups() {
         let dir = TempDir::new().unwrap();
-        let db = write_file(dir.path(), "app.db", b"live");
-        let resets = dir.path().join("resets");
+        let config = make_config(&dir);
+        let db = config.db_path();
+        std::fs::write(&db, b"live").unwrap();
+        let resets = config.resets_path();
         std::fs::create_dir(&resets).unwrap();
 
         let result = restore_reset_backup(&db, &resets);
@@ -1087,8 +1140,10 @@ mod tests {
         use std::os::unix::fs::PermissionsExt;
 
         let dir = TempDir::new().unwrap();
-        let db = write_file(dir.path(), "app.db", b"partial");
-        let resets = dir.path().join("resets");
+        let config = make_config(&dir);
+        let db = config.db_path();
+        std::fs::write(&db, b"partial").unwrap();
+        let resets = config.resets_path();
         std::fs::create_dir(&resets).unwrap();
 
         let backup = write_file(&resets, "reset-20240101T000000Z.db", b"backup-content");

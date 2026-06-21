@@ -115,9 +115,7 @@ fn create_migrations_dir(config: &Runtime) -> anyhow::Result<()> {
 /// Create the backups directory tree (`snapshots/`, `resets/`) and write a
 /// `.gitignore` inside each subdirectory to exclude its contents.
 fn create_backups_dir(config: &Runtime) -> anyhow::Result<()> {
-    let base = config.backups_path();
-    for sub in ["snapshots", "resets"] {
-        let dir = base.join(sub);
+    for dir in [config.snapshots_path(), config.resets_path()] {
         std::fs::create_dir_all(&dir)
             .with_context(|| format!("failed to create {}", dir.display()))?;
         let gitignore = dir.join(".gitignore");
