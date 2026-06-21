@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context;
 use chrono::NaiveDateTime;
 
-use crate::config::Config;
+use crate::config::Runtime;
 use crate::errors::CliError;
 use crate::snapshot;
 
@@ -12,7 +12,7 @@ use crate::snapshot;
 /// Restores the database from a reset backup. With no timestamp, the most
 /// recent reset backup is used. With a timestamp, the matching
 /// `reset-<timestamp>.db` file is used.
-pub fn run(timestamp: Option<String>, yes: bool, config: &Config) -> anyhow::Result<()> {
+pub fn run(timestamp: Option<String>, yes: bool, config: &Runtime) -> anyhow::Result<()> {
     if config.is_memory_db() {
         return Err(CliError::Usage("cannot restore an in-memory database".to_string()).into());
     }

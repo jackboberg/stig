@@ -124,7 +124,7 @@ fn main() {
         }
 
         // Load config only for non-init commands: `stig init --config <path>`
-        // targets a file that does not exist yet, so Config::load would fail
+        // targets a file that does not exist yet, so Runtime::load would fail
         // before init has a chance to create it.
         let config = ctx.load_config()?;
         match cli.command {

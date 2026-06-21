@@ -1,6 +1,6 @@
 use anyhow::Context;
 
-use crate::config::Config;
+use crate::config::Runtime;
 use crate::db::{Db, ensure_schema_migrations, format_drift_messages};
 use crate::errors::CliError;
 use crate::migrate::apply;
@@ -9,7 +9,7 @@ use crate::migrate::plan::Plan;
 use crate::schema;
 
 /// Run `stig migrate`.
-pub fn run(dry_run: bool, config: &Config) -> anyhow::Result<()> {
+pub fn run(dry_run: bool, config: &Runtime) -> anyhow::Result<()> {
     let migrations_dir = config.migrations_path();
     if !migrations_dir.is_dir() {
         return Err(CliError::Prerequisite(format!(
@@ -20,7 +20,7 @@ pub fn run(dry_run: bool, config: &Config) -> anyhow::Result<()> {
     }
 
     let db = Db::open(config)
-        .with_context(|| format!("failed to open database at {}", config.database_path))?;
+        .with_context(|| format!("failed to open database at {}", config.file.database_path))?;
 
     ensure_schema_migrations(db.connection())?;
 
@@ -28,7 +28,7 @@ pub fn run(dry_run: bool, config: &Config) -> anyhow::Result<()> {
 
     let plan = Plan::build(&files, db.connection())?;
 
-    if config.checksum_check {
+    if config.file.checksum_check {
         let drifted = plan.drifted();
         if !drifted.is_empty() {
             let snapshots_dir = config.snapshots_path();
@@ -50,7 +50,7 @@ pub fn run(dry_run: bool, config: &Config) -> anyhow::Result<()> {
             .context("failed to apply schema manifest")?;
         println!(
             "✓ applied {} ({n_applied} migrations marked as applied)",
-            config.schema_path
+            config.file.schema_path
         );
     } else {
         apply::apply_pending(&db, &plan, config, dry_run)?;

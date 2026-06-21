@@ -3,19 +3,19 @@ use std::time::Duration;
 use anyhow::Context;
 
 use crate::cli::BackupsCommand;
-use crate::config::Config;
+use crate::config::Runtime;
 use crate::errors::CliError;
 use crate::snapshot;
 
 /// Run `stig backups <subcommand>`.
-pub fn run(command: BackupsCommand, config: &Config) -> anyhow::Result<()> {
+pub fn run(command: BackupsCommand, config: &Runtime) -> anyhow::Result<()> {
     match command {
         BackupsCommand::List => list(config),
         BackupsCommand::Prune { yes } => prune(yes, config),
     }
 }
 
-fn list(config: &Config) -> anyhow::Result<()> {
+fn list(config: &Runtime) -> anyhow::Result<()> {
     let snapshots_dir = config.snapshots_path();
     let resets_dir = config.resets_path();
 
@@ -25,7 +25,7 @@ fn list(config: &Config) -> anyhow::Result<()> {
     println!(
         "snapshots ({} of max {}):",
         snapshots.len(),
-        config.snapshot_keep
+        config.file.snapshot_keep
     );
     for entry in &snapshots {
         println!(
@@ -37,7 +37,11 @@ fn list(config: &Config) -> anyhow::Result<()> {
     }
 
     println!();
-    println!("resets ({} of max {}):", resets.len(), config.reset_keep);
+    println!(
+        "resets ({} of max {}):",
+        resets.len(),
+        config.file.reset_keep
+    );
     for entry in &resets {
         println!(
             "  {:<36} {:>8}   {} ago",
@@ -50,15 +54,15 @@ fn list(config: &Config) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn prune(yes: bool, config: &Config) -> anyhow::Result<()> {
+fn prune(yes: bool, config: &Runtime) -> anyhow::Result<()> {
     confirm_or_abort(yes)?;
 
     let snapshots_dir = config.snapshots_path();
     let resets_dir = config.resets_path();
 
-    snapshot::prune_snapshots(&snapshots_dir, config.snapshot_keep)
+    snapshot::prune_snapshots(&snapshots_dir, config.file.snapshot_keep)
         .context("failed to prune snapshots")?;
-    snapshot::prune_resets(&resets_dir, config.reset_keep)
+    snapshot::prune_resets(&resets_dir, config.file.reset_keep)
         .context("failed to prune reset backups")?;
 
     println!("✓ backups pruned");

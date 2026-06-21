@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::Context;
 
-use crate::config::Config;
+use crate::config::Runtime;
 use crate::db::{Db, ensure_schema_migrations};
 use crate::errors::CliError;
 use crate::migrate::apply;
@@ -12,7 +12,7 @@ use crate::schema;
 use crate::snapshot;
 
 /// Run `stig reset [--yes]`.
-pub fn run(yes: bool, config: &Config) -> anyhow::Result<()> {
+pub fn run(yes: bool, config: &Runtime) -> anyhow::Result<()> {
     let migrations_dir = config.migrations_path();
     if !migrations_dir.is_dir() {
         return Err(CliError::Prerequisite(format!(
@@ -33,7 +33,7 @@ pub fn run(yes: bool, config: &Config) -> anyhow::Result<()> {
     })?;
 
     let db = Db::open(config)
-        .with_context(|| format!("failed to open database at {}", config.database_path))?;
+        .with_context(|| format!("failed to open database at {}", config.file.database_path))?;
 
     ensure_schema_migrations(db.connection())?;
 
@@ -61,7 +61,7 @@ pub fn run(yes: bool, config: &Config) -> anyhow::Result<()> {
 
     println!("✓ reset complete");
 
-    snapshot::prune_resets(&resets_dir, config.reset_keep)
+    snapshot::prune_resets(&resets_dir, config.file.reset_keep)
         .context("failed to prune reset backups")?;
 
     Ok(())
@@ -89,9 +89,9 @@ fn confirm_or_abort(yes: bool) -> anyhow::Result<()> {
 /// Open a fresh database and reapply all migrations. Uses the schema manifest
 /// if available and up to date for a fast reset; otherwise replays all
 /// migrations individually.
-fn reapply_pending(config: &Config, migrations_dir: &Path) -> anyhow::Result<()> {
+fn reapply_pending(config: &Runtime, migrations_dir: &Path) -> anyhow::Result<()> {
     let db = Db::open(config)
-        .with_context(|| format!("failed to open database at {}", config.database_path))?;
+        .with_context(|| format!("failed to open database at {}", config.file.database_path))?;
 
     ensure_schema_migrations(db.connection())?;
 
@@ -102,7 +102,7 @@ fn reapply_pending(config: &Config, migrations_dir: &Path) -> anyhow::Result<()>
             .context("failed to apply schema manifest")?;
         println!(
             "✓ applied {} ({n} migrations marked as applied)",
-            config.schema_path
+            config.file.schema_path
         );
     } else {
         let plan = Plan::build(&files, db.connection())?;

@@ -7,7 +7,7 @@ use sqlparser::dialect::SQLiteDialect;
 use sqlparser::parser::Parser;
 use tracing::warn;
 
-use crate::config::Config;
+use crate::config::Runtime;
 use crate::db::Db;
 use crate::errors::CliError;
 use crate::sha256_hex;
@@ -332,10 +332,10 @@ fn apply_single_migration(
 ///
 /// When `dry_run` is true, files are read and parsed but no SQL is executed
 /// and no snapshots are written.
-pub fn apply_pending(db: &Db, plan: &Plan, config: &Config, dry_run: bool) -> Result<()> {
+pub fn apply_pending(db: &Db, plan: &Plan, config: &Runtime, dry_run: bool) -> Result<()> {
     let snapshots_dir = config.snapshots_path();
     let db_path = config.db_path();
-    let can_snapshot = config.auto_snapshot && !db.is_memory();
+    let can_snapshot = config.file.auto_snapshot && !db.is_memory();
     let mut n_applied = 0u32;
 
     for entry in plan.pending() {
@@ -345,7 +345,7 @@ pub fn apply_pending(db: &Db, plan: &Plan, config: &Config, dry_run: bool) -> Re
     }
 
     if !dry_run && can_snapshot && snapshots_dir.exists() && n_applied > 0 {
-        snapshot::prune_snapshots(&snapshots_dir, config.snapshot_keep)?;
+        snapshot::prune_snapshots(&snapshots_dir, config.file.snapshot_keep)?;
     }
 
     Ok(())

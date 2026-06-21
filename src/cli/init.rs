@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context as _;
 
 use crate::config::env_source::ProcessEnv;
-use crate::config::{CliContext, Config};
+use crate::config::{CliContext, ConfigFile, Runtime};
 use crate::db::Db;
 use crate::errors::CliError;
 use crate::schema;
@@ -29,9 +29,9 @@ pub fn run(ctx: &CliContext) -> anyhow::Result<()> {
     guard_no_existing_config(ctx, &cwd)?;
 
     let (config_path, project_root) = resolve_init_paths(ctx, &cwd)?;
-    let mut config = Config {
+    let mut config = Runtime {
         project_root: project_root.clone(),
-        ..Config::default()
+        file: ConfigFile::default(),
     };
     config.apply_cli_overrides(&ctx.overrides);
 
@@ -51,7 +51,7 @@ fn guard_no_existing_config(ctx: &CliContext, cwd: &Path) -> anyhow::Result<()> 
         if path.is_file() {
             return Err(CliError::Usage(format!("{} already exists", path.display())).into());
         }
-    } else if let Some(existing) = Config::resolve_config_path(None, &ProcessEnv, None) {
+    } else if let Some(existing) = Runtime::resolve_config_path(None, &ProcessEnv, None) {
         return Err(CliError::Usage(format!("{} already exists", existing.display())).into());
     }
     Ok(())
@@ -90,7 +90,7 @@ fn current_dir() -> anyhow::Result<PathBuf> {
 
 /// Serialise `config` to `config_path`, creating its parent directory if
 /// necessary. Prints a path relative to `project_root` when possible.
-fn write_config(config: &Config, config_path: &Path, project_root: &Path) -> anyhow::Result<()> {
+fn write_config(config: &Runtime, config_path: &Path, project_root: &Path) -> anyhow::Result<()> {
     if let Some(parent) = config_path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("failed to create {}", parent.display()))?;
@@ -105,16 +105,16 @@ fn write_config(config: &Config, config_path: &Path, project_root: &Path) -> any
 }
 
 /// Create the migrations directory.
-fn create_migrations_dir(config: &Config) -> anyhow::Result<()> {
+fn create_migrations_dir(config: &Runtime) -> anyhow::Result<()> {
     let dir = config.migrations_path();
     std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
-    println!("✓ created {}/", config.migrations_dir);
+    println!("✓ created {}/", config.file.migrations_dir);
     Ok(())
 }
 
 /// Create the backups directory tree (`snapshots/`, `resets/`) and write a
 /// `.gitignore` inside each subdirectory to exclude its contents.
-fn create_backups_dir(config: &Config) -> anyhow::Result<()> {
+fn create_backups_dir(config: &Runtime) -> anyhow::Result<()> {
     let base = config.backups_path();
     for sub in ["snapshots", "resets"] {
         let dir = base.join(sub);
@@ -128,7 +128,7 @@ fn create_backups_dir(config: &Config) -> anyhow::Result<()> {
     }
     println!(
         "✓ created {}/{{snapshots,resets}}/ (gitignored)",
-        config.backups_dir
+        config.file.backups_dir
     );
     Ok(())
 }
@@ -138,7 +138,7 @@ fn create_backups_dir(config: &Config) -> anyhow::Result<()> {
 /// Returns a usage error if something other than a regular file exists at the
 /// target path (e.g. a directory), since later operations would fail with a
 /// less clear error.
-fn create_schema_manifest(config: &Config) -> anyhow::Result<()> {
+fn create_schema_manifest(config: &Runtime) -> anyhow::Result<()> {
     let path = config.schema_file_path();
     if path.is_file() {
         return Ok(());
@@ -152,7 +152,7 @@ fn create_schema_manifest(config: &Config) -> anyhow::Result<()> {
     }
     schema::write_schema_sql(config, "")
         .with_context(|| "failed to create schema manifest".to_string())?;
-    println!("✓ created {}", config.schema_path);
+    println!("✓ created {}", config.file.schema_path);
     Ok(())
 }
 
@@ -161,9 +161,9 @@ fn create_schema_manifest(config: &Config) -> anyhow::Result<()> {
 ///
 /// Per SPEC §5: `checksum` has no DEFAULT so every applied migration must
 /// explicitly record its SHA-256.
-fn bootstrap_database(config: &Config) -> anyhow::Result<()> {
+fn bootstrap_database(config: &Runtime) -> anyhow::Result<()> {
     let db = Db::open(config)
-        .with_context(|| format!("failed to open database at {}", config.database_path))?;
+        .with_context(|| format!("failed to open database at {}", config.file.database_path))?;
     db.connection().execute_batch(
         "CREATE TABLE IF NOT EXISTS schema_migrations (
             version    TEXT NOT NULL PRIMARY KEY,
@@ -171,6 +171,9 @@ fn bootstrap_database(config: &Config) -> anyhow::Result<()> {
             applied_at TEXT NOT NULL DEFAULT (datetime('now'))
         );",
     )?;
-    println!("✓ created schema_migrations in {}", config.database_path);
+    println!(
+        "✓ created schema_migrations in {}",
+        config.file.database_path
+    );
     Ok(())
 }
