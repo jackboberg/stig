@@ -50,6 +50,9 @@ impl Db {
     /// - For `:memory:`: skips `journal_mode` (WAL-incompatible) and emits a
     ///   warning that snapshot/reset operations are not supported in this mode.  `foreign_keys` is
     ///   still applied.
+    ///
+    /// After applying PRAGMAs, ensures the `schema_migrations` table exists
+    /// (idempotent `CREATE TABLE IF NOT EXISTS`).
     pub fn open(config: &Runtime) -> Result<Self> {
         let is_memory = config.is_memory_db();
         let resolved = config.db_path();
@@ -67,6 +70,7 @@ impl Db {
         let db = Self { conn, is_memory };
 
         db.apply_pragmas(&config.file.pragmas)?;
+        ensure_schema_migrations(db.connection())?;
 
         Ok(db)
     }

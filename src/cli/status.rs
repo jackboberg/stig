@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 
 use crate::config::Runtime;
-use crate::db::{Db, ensure_schema_migrations, format_drift_messages};
+use crate::db::{Db, format_drift_messages};
 use crate::errors::CliError;
 use crate::migrate::discover::discover;
 use crate::migrate::plan::{MigrationStatus, Plan};
@@ -20,8 +20,6 @@ pub fn run(config: &Runtime) -> Result<()> {
 
     let db = Db::open(config)
         .with_context(|| format!("failed to open database at {}", config.file.database_path))?;
-
-    ensure_schema_migrations(db.connection())?;
 
     let files = discover(&migrations_dir).context("failed to discover migration files")?;
     let plan = Plan::build(&files, db.connection())?;
