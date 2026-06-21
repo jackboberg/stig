@@ -331,3 +331,54 @@ fn redo_non_tty_declined_exits_2() {
     assert_eq!(count_schema_migrations(&dir), 1);
     assert!(table_exists(&dir, "users"));
 }
+
+// Even when a fresh schema manifest exists, redo must replay migrations
+// individually (not use the manifest fast path) because the snapshot restore
+// leaves prior schema in place.
+#[test]
+fn redo_does_not_use_schema_manifest_fast_path() {
+    let dir = TempDir::new().unwrap();
+
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_users",
+        "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);",
+    );
+    write_migration(
+        &dir,
+        "20240102000000",
+        "create_posts",
+        "CREATE TABLE posts (id INTEGER PRIMARY KEY, title TEXT);",
+    );
+
+    // First migrate to generate schema.sql
+    stig_cmd(&dir).arg("migrate").assert().success();
+
+    // schema.sql should now exist and be fresh
+    assert!(dir.path().join("db/schema.sql").exists());
+
+    // Edit the second migration
+    write_migration(
+        &dir,
+        "20240102000000",
+        "create_posts",
+        "CREATE TABLE articles (id INTEGER PRIMARY KEY, body TEXT);",
+    );
+
+    stig_cmd(&dir)
+        .arg("redo")
+        .arg("--yes")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("apply"))
+        .stdout(predicate::str::contains("applied db/schema.sql").not())
+        .stdout(predicate::str::contains("✓ redo complete"));
+
+    assert!(table_exists(&dir, "users"));
+    assert!(!table_exists(&dir, "posts"));
+    assert!(table_exists(&dir, "articles"));
+    assert_eq!(count_schema_migrations(&dir), 2);
+}
