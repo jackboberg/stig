@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Internal config API refactored: the public `Config` struct is replaced by a `Runtime` wrapper around a `pub(crate) ConfigFile` (the serde mirror of `stig.toml`) plus the resolved `project_root`. Path-resolution accessors (`db_path`, `migrations_path`, `backups_path`, `snapshots_path`, `resets_path`, `schema_file_path`, `is_memory_db`) now live on `Runtime`, so callers should use them instead of joining `project_root` with raw string fields. The supporting types `CliContext` and `CliOverrides` are renamed to `RunContext` and `ConfigOverrides`.
 - Extracted shared `reapply_pending` into `src/migrate/mod.rs`, eliminating duplication between `redo` and `reset`. The schema-manifest fast path remains exclusive to `reset` (documented inline).
 - Eliminated remaining bare `"snapshots"` / `"resets"` string literals from production code (`init.rs`) and unit tests (`snapshot.rs`). All call sites now use `Runtime::snapshots_path()` and `Runtime::resets_path()` helpers.
+- `Db::open` now ensures the `schema_migrations` table exists internally, eliminating duplication across CLI call sites (`status`, `schema`, `migrate`, `redo`, `reset`).
 
 ### Fixed
 
