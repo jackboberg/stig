@@ -91,12 +91,11 @@ fn reapply_pending_with_fast_path(config: &Runtime, migrations_dir: &Path) -> an
     let db = Db::open(config)
         .with_context(|| format!("failed to open database at {}", config.file.database_path))?;
 
-    ensure_schema_migrations(db.connection())?;
-
     let files = migrate::discover::discover(migrations_dir)
         .context("failed to discover migration files")?;
 
     if schema::schema_has_content(config) && schema::schema_is_fresh(config, &files) {
+        ensure_schema_migrations(db.connection())?;
         let n = schema::apply_schema_manifest(&db, config)
             .context("failed to apply schema manifest")?;
         println!(
