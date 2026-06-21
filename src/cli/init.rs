@@ -25,9 +25,10 @@ use crate::schema;
 /// bootstraps the database. CLI overrides are applied to the default config
 /// before writing.
 pub fn run(ctx: &CliContext) -> anyhow::Result<()> {
-    guard_no_existing_config(ctx)?;
+    let cwd = current_dir()?;
+    guard_no_existing_config(ctx, &cwd)?;
 
-    let (config_path, project_root) = resolve_init_paths(ctx)?;
+    let (config_path, project_root) = resolve_init_paths(ctx, &cwd)?;
     let mut config = Config {
         project_root: project_root.clone(),
         ..Config::default()
@@ -44,9 +45,9 @@ pub fn run(ctx: &CliContext) -> anyhow::Result<()> {
 }
 
 /// Return an error (exit 2) if the target config file already exists.
-fn guard_no_existing_config(ctx: &CliContext) -> anyhow::Result<()> {
+fn guard_no_existing_config(ctx: &CliContext, cwd: &Path) -> anyhow::Result<()> {
     if let Some(ref target) = ctx.config_path {
-        let path = current_dir()?.join(target);
+        let path = cwd.join(target);
         if path.is_file() {
             return Err(CliError::Usage(format!("{} already exists", path.display())).into());
         }
@@ -62,26 +63,19 @@ fn guard_no_existing_config(ctx: &CliContext) -> anyhow::Result<()> {
 ///   project root is its parent directory (resolved against CWD).
 /// - Otherwise the config file is `<cwd>/stig.toml` and the project root is
 ///   the current working directory.
-fn resolve_init_paths(ctx: &CliContext) -> anyhow::Result<(PathBuf, PathBuf)> {
-    let cwd = current_dir()?;
+fn resolve_init_paths(ctx: &CliContext, cwd: &Path) -> anyhow::Result<(PathBuf, PathBuf)> {
     let (config_path, project_root) = match &ctx.config_path {
         Some(target) => {
             let path = cwd.join(target);
             let root = path
                 .parent()
-                .map(|p| {
-                    if p.as_os_str().is_empty() {
-                        cwd.clone()
-                    } else {
-                        p.to_path_buf()
-                    }
-                })
-                .unwrap_or_else(|| cwd.clone());
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| cwd.to_path_buf());
             (path, root)
         }
         None => {
             let path = cwd.join("stig.toml");
-            (path, cwd)
+            (path, cwd.to_path_buf())
         }
     };
     Ok((config_path, project_root))
