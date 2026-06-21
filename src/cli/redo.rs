@@ -5,7 +5,7 @@ use anyhow::Context;
 use crate::config::Runtime;
 use crate::db::{Db, delete_from_version, ensure_schema_migrations};
 use crate::errors::CliError;
-use crate::migrate::apply;
+use crate::migrate;
 use crate::migrate::discover::discover;
 use crate::migrate::plan::{MigrationStatus, Plan};
 use crate::snapshot;
@@ -36,7 +36,15 @@ pub fn run(version: Option<String>, yes: bool, config: &Runtime) -> anyhow::Resu
     confirm_or_abort(&target, yes)?;
 
     restore_and_clear(db, config, &target, &snapshots_dir)?;
-    reapply_pending(config, &migrations_dir)?;
+    // Re-open the database and reapply pending migrations.
+    // The schema-manifest fast path is intentionally NOT used here: after a
+    // snapshot restore the database already contains schema from prior
+    // migrations, so applying the full manifest would fail with "table already
+    // exists". Only `reset` (which starts from a completely empty database)
+    // can safely use the fast path.
+    let db = Db::open(config)
+        .with_context(|| format!("failed to open database at {}", config.file.database_path))?;
+    migrate::reapply_pending(&db, config, &migrations_dir)?;
 
     println!("✓ redo complete");
 
@@ -144,22 +152,6 @@ fn restore_and_clear(
     conn.close()
         .map_err(|(_, e)| e)
         .context("failed to close database")?;
-
-    Ok(())
-}
-
-/// Re-open the database, discover migrations, build a plan, and apply all
-/// pending migrations.
-fn reapply_pending(config: &Runtime, migrations_dir: &Path) -> anyhow::Result<()> {
-    let db = Db::open(config)
-        .with_context(|| format!("failed to open database at {}", config.file.database_path))?;
-
-    ensure_schema_migrations(db.connection())?;
-
-    let files = discover(migrations_dir).context("failed to discover migration files")?;
-    let plan = Plan::build(&files, db.connection())?;
-
-    apply::apply_pending(&db, &plan, config, false)?;
 
     Ok(())
 }
