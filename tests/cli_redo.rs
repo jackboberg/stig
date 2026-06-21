@@ -301,3 +301,33 @@ fn redo_exits_4_when_version_not_applied() {
             "version not found in applied migrations",
         ));
 }
+
+// Non-TTY confirmation (empty stdin) is treated as decline and exits 2.
+#[test]
+fn redo_non_tty_declined_exits_2() {
+    let dir = TempDir::new().unwrap();
+
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_users",
+        "CREATE TABLE users (id INTEGER);",
+    );
+
+    stig_cmd(&dir).arg("migrate").assert().success();
+
+    // Pipe empty stdin to simulate a non-TTY / CI environment.
+    stig_cmd(&dir)
+        .arg("redo")
+        .write_stdin("")
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains("operation cancelled"));
+
+    // Database must be untouched.
+    assert_eq!(count_schema_migrations(&dir), 1);
+    assert!(table_exists(&dir, "users"));
+}

@@ -100,22 +100,23 @@ fn require_snapshot(target: &str, plan: &Plan, snapshots_dir: &Path) -> anyhow::
 }
 
 /// Prompt for confirmation unless `--yes` was passed. Returns `Ok(())` to
-/// proceed, or `Err(CliError::Declined)` if the user declines.
+/// proceed, or `Err(CliError::Declined)` if the user declines or stdin is
+/// not interactive (e.g. piped).
 fn confirm_or_abort(target: &str, yes: bool) -> anyhow::Result<()> {
     if yes {
         return Ok(());
     }
     let prompt = format!("this will discard local data added since version {target}. Continue?");
-    if !dialoguer::Confirm::new()
+    match dialoguer::Confirm::new()
         .with_prompt(&prompt)
         .default(false)
         .interact()
-        .context("failed to read confirmation")?
     {
-        // User declined — return a sentinel the caller can detect.
-        return Err(CliError::Declined.into());
+        Ok(true) => Ok(()),
+        Ok(false) => Err(CliError::Declined.into()),
+        // stdin is not a TTY (piped) — treat as decline.
+        Err(_) => Err(CliError::Declined.into()),
     }
-    Ok(())
 }
 
 /// Checkpoint, close the connection, restore the snapshot, then delete stale
