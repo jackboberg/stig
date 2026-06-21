@@ -277,6 +277,22 @@ exclude = ["posts"]
 
 `.env` is loaded automatically at the start of every command.
 
+### CLI flags
+
+Global flags accepted by every subcommand:
+
+| Flag | Overrides | Notes |
+|---|---|---|
+| `--config <path>` | config file path | Beats `STIG_CONFIG` |
+| `--database-path <path>` | `database_path` | |
+| `--migrations-dir <path>` | `migrations_dir` | |
+| `--backups-dir <path>` | `backups_dir` | |
+| `--schema-path <path>` | `schema_path` | |
+| `--no-snapshot` | sets `auto_snapshot = false` | |
+| `--no-checksum` | sets `checksum_check = false` | |
+
+When passed to `stig init`, the values of these flags are written into the generated `stig.toml`. For all other commands they apply only to that invocation.
+
 ### Precedence
 
 For any setting, highest wins:

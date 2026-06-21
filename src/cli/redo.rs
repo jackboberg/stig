@@ -2,8 +2,7 @@ use std::path::Path;
 
 use anyhow::Context;
 
-use crate::config::Config;
-use crate::config::env_source::ProcessEnv;
+use crate::config::Runtime;
 use crate::db::{Db, delete_from_version, ensure_schema_migrations};
 use crate::errors::CliError;
 use crate::migrate::apply;
@@ -12,10 +11,8 @@ use crate::migrate::plan::{MigrationStatus, Plan};
 use crate::snapshot;
 
 /// Run `stig redo [<version>] [--yes]`.
-pub fn run(version: Option<String>, yes: bool) -> anyhow::Result<()> {
-    let config = Config::load(None, &ProcessEnv, None)?;
-
-    let migrations_dir = config.project_root.join(&config.migrations_dir);
+pub fn run(version: Option<String>, yes: bool, config: &Runtime) -> anyhow::Result<()> {
+    let migrations_dir = config.migrations_path();
     if !migrations_dir.is_dir() {
         return Err(CliError::Prerequisite(format!(
             "migrations directory not found: {}",
@@ -24,13 +21,10 @@ pub fn run(version: Option<String>, yes: bool) -> anyhow::Result<()> {
         .into());
     }
 
-    let snapshots_dir = config
-        .project_root
-        .join(&config.backups_dir)
-        .join("snapshots");
+    let snapshots_dir = config.snapshots_path();
 
-    let db = Db::open(&config)
-        .with_context(|| format!("failed to open database at {}", config.database_path))?;
+    let db = Db::open(config)
+        .with_context(|| format!("failed to open database at {}", config.file.database_path))?;
 
     ensure_schema_migrations(db.connection())?;
 
@@ -41,8 +35,8 @@ pub fn run(version: Option<String>, yes: bool) -> anyhow::Result<()> {
     require_snapshot(&target, &plan, &snapshots_dir)?;
     confirm_or_abort(&target, yes)?;
 
-    restore_and_clear(db, &config, &target, &snapshots_dir)?;
-    reapply_pending(&config, &migrations_dir)?;
+    restore_and_clear(db, config, &target, &snapshots_dir)?;
+    reapply_pending(config, &migrations_dir)?;
 
     println!("✓ redo complete");
 
@@ -128,14 +122,14 @@ fn confirm_or_abort(target: &str, yes: bool) -> anyhow::Result<()> {
 /// `schema_migrations` rows.
 fn restore_and_clear(
     db: Db,
-    config: &Config,
+    config: &Runtime,
     target: &str,
     snapshots_dir: &Path,
 ) -> anyhow::Result<()> {
     db.checkpoint()?;
     db.close()?;
 
-    let db_path = config.resolve_path(&config.database_path);
+    let db_path = config.db_path();
 
     println!("restoring pre-{target}.db");
     snapshot::restore_snapshot(target, &db_path, snapshots_dir)
@@ -155,9 +149,9 @@ fn restore_and_clear(
 
 /// Re-open the database, discover migrations, build a plan, and apply all
 /// pending migrations.
-fn reapply_pending(config: &Config, migrations_dir: &Path) -> anyhow::Result<()> {
+fn reapply_pending(config: &Runtime, migrations_dir: &Path) -> anyhow::Result<()> {
     let db = Db::open(config)
-        .with_context(|| format!("failed to open database at {}", config.database_path))?;
+        .with_context(|| format!("failed to open database at {}", config.file.database_path))?;
 
     ensure_schema_migrations(db.connection())?;
 

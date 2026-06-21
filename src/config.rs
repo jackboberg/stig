@@ -2,11 +2,12 @@
 //!
 //! Loads `stig.toml` from the project root (upward search from CWD, or an
 //! explicit path), applies environment-variable overrides, and exposes a
-//! [`Config`] struct to the rest of the crate.
+//! [`Runtime`] struct (on-disk [`ConfigFile`] plus resolved `project_root`)
+//! to the rest of the crate.
 //!
 //! Precedence (highest to lowest):
-//! 1. CLI flags — applied via [`Config::apply_cli_overrides`]
-//! 2. Environment variables — applied inside [`Config::load`]
+//! 1. CLI flags — applied via [`Runtime::apply_cli_overrides`]
+//! 2. Environment variables — applied inside [`Runtime::load`]
 //! 3. `stig.toml` values
 //! 4. Built-in defaults ([`Default`] impl)
 
@@ -73,7 +74,7 @@ pub mod env_source {
     }
 }
 
-use env_source::EnvSource;
+use env_source::{EnvSource, ProcessEnv};
 
 // ---------------------------------------------------------------------------
 // Sub-structs
@@ -152,7 +153,7 @@ pub struct GenerateTarget {
 /// Optional overrides supplied via CLI flags. Each field is `None` unless the
 /// corresponding flag was explicitly passed.
 #[derive(Debug, Default, Clone)]
-pub struct CliOverrides {
+pub struct ConfigOverrides {
     pub database_path: Option<String>,
     pub migrations_dir: Option<String>,
     pub backups_dir: Option<String>,
@@ -161,24 +162,45 @@ pub struct CliOverrides {
     pub schema_path: Option<String>,
 }
 
+/// Runtime context derived from the parsed CLI invocation.
+///
+/// Carries the explicit `--config` path and the parsed CLI overrides so that
+/// individual commands can load configuration with the correct precedence
+/// (CLI flags > environment variables > `stig.toml` > defaults) from a single
+/// call site.
+#[derive(Debug, Default, Clone)]
+pub struct RunContext {
+    /// Explicit config file path from `--config`.
+    pub config_path: Option<PathBuf>,
+    /// Parsed CLI overrides.
+    pub overrides: ConfigOverrides,
+}
+
+impl RunContext {
+    /// Load configuration using the process environment and then apply any
+    /// CLI overrides carried by this context.
+    pub fn load_config(&self) -> Result<Runtime, CliError> {
+        let mut runtime = Runtime::load(self.config_path.as_deref(), &ProcessEnv, None)?;
+        runtime.apply_cli_overrides(&self.overrides);
+        Ok(runtime)
+    }
+}
+
 // ---------------------------------------------------------------------------
-// Main Config struct
+// On-disk config file (TOML mirror)
 // ---------------------------------------------------------------------------
 
-/// Resolved configuration for a `stig` invocation.
+/// On-disk shape of `stig.toml`.
+///
+/// Mirrors the serialised TOML structure exactly: no `project_root`, all
+/// fields expressed as the strings/values users wrote. Use [`Runtime`] for
+/// the resolved runtime configuration (which carries `project_root` and the
+/// path-resolution accessors).
+///
+/// Kept `pub(crate)` so the on-disk format remains an implementation detail
+/// of the crate — the public consumer surface is [`Runtime`].
 #[derive(Debug, Clone, PartialEq, Deserialize, Serialize)]
-pub struct Config {
-    /// The project root directory: the parent of the `stig.toml` file when
-    /// one is found, or `start_dir` when supplied to [`Config::load`], or the
-    /// process CWD as a last resort when no config file is found and no
-    /// `start_dir` is provided. All relative paths in the config
-    /// (`database_path`, `migrations_dir`, `backups_dir`,
-    /// `[[generate]].path`) should be resolved against this directory.
-    ///
-    /// Not serialized — populated by [`Config::load`].
-    #[serde(skip)]
-    pub project_root: PathBuf,
-
+pub(crate) struct ConfigFile {
     /// Path to the live SQLite database.
     #[serde(default = "default_database_path")]
     pub database_path: String,
@@ -246,10 +268,9 @@ fn default_schema_path() -> String {
     "db/schema.sql".to_string()
 }
 
-impl Default for Config {
+impl Default for ConfigFile {
     fn default() -> Self {
         Self {
-            project_root: PathBuf::new(),
             database_path: default_database_path(),
             migrations_dir: default_migrations_dir(),
             backups_dir: default_backups_dir(),
@@ -265,20 +286,63 @@ impl Default for Config {
 }
 
 // ---------------------------------------------------------------------------
+// Runtime (resolved configuration)
+// ---------------------------------------------------------------------------
+
+/// Resolved configuration for a `stig` invocation.
+///
+/// Pairs an on-disk [`ConfigFile`] with the `project_root` the file was
+/// resolved against. Path-resolution accessors ([`Self::db_path`],
+/// [`Self::migrations_path`], etc.) live here so callers stop reaching for
+/// `project_root` and the raw string fields directly.
+///
+/// Built by [`Runtime::load`] or by [`RunContext::load_config`] (which
+/// additionally applies CLI overrides on top of file + env).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Runtime {
+    /// The project root directory: the parent of the `stig.toml` file when
+    /// one is found, or `start_dir` when supplied to [`Runtime::load`], or
+    /// the process CWD as a last resort when no config file is found and no
+    /// `start_dir` is provided. All relative paths in the on-disk file
+    /// (`database_path`, `migrations_dir`, `backups_dir`,
+    /// `[[generate]].path`) are resolved against this directory.
+    pub project_root: PathBuf,
+
+    /// On-disk fields parsed from `stig.toml` (or defaults). Held as the
+    /// single source of truth for serialisable values; in-crate callers
+    /// should prefer the accessor methods over reaching into `file`
+    /// directly. Kept `pub(crate)` because the on-disk shape is an
+    /// implementation detail.
+    pub(crate) file: ConfigFile,
+}
+
+impl Default for Runtime {
+    fn default() -> Self {
+        Self {
+            project_root: PathBuf::new(),
+            file: ConfigFile::default(),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Loading logic
 // ---------------------------------------------------------------------------
 
-impl Config {
+impl Runtime {
     /// Load configuration, applying the following precedence:
     ///
     /// 1. Environment variables (from `env`)
     /// 2. `stig.toml` values
     /// 3. Built-in defaults
     ///
+    /// CLI flag overrides are applied separately by callers via
+    /// [`Runtime::apply_cli_overrides`] (or through [`RunContext::load_config`]).
+    ///
     /// # Parameters
     ///
     /// - `override_path`: explicit config file path (e.g. from `--config`).
-    ///   Ignored if `STIG_CONFIG` is set in `env`.
+    ///   Takes precedence over `STIG_CONFIG` when both are set.
     /// - `env`: environment-variable source. Use [`env_source::ProcessEnv`] in production
     ///   to read the real process environment; use [`env_source::MapEnv`] in tests for
     ///   full isolation (structurally cannot read `std::env`).
@@ -292,8 +356,8 @@ impl Config {
     /// # Errors
     ///
     /// Returns [`CliError::Usage`] (exit 2) if the config file is found but
-    /// contains invalid TOML or fails to deserialise into [`Config`] (reported
-    /// as "invalid config").
+    /// contains invalid TOML or fails to deserialise into [`ConfigFile`]
+    /// (reported as "invalid config").
     ///
     /// A missing config file is **not** an error — defaults are used.
     pub fn load<E: EnvSource>(
@@ -307,12 +371,12 @@ impl Config {
         let config_path = Self::resolve_config_path(override_path, env, start_dir);
 
         // Parse the file, or start from defaults if there is no file.
-        let mut config: Config = match config_path {
+        let mut runtime: Runtime = match config_path {
             Some(ref path) => {
                 let raw = std::fs::read_to_string(path).map_err(|e| {
                     CliError::Usage(format!("cannot read config file {}: {}", path.display(), e))
                 })?;
-                let mut cfg: Config = toml::from_str(&raw).map_err(|e| {
+                let file: ConfigFile = toml::from_str(&raw).map_err(|e| {
                     CliError::Usage(format!("invalid config in {}: {}", path.display(), e))
                 })?;
                 // Set project_root to the directory containing the config file
@@ -323,7 +387,7 @@ impl Config {
                 // filename like "stig.toml" (where path.parent() == Some(""))
                 // is resolved against CWD before we strip the filename component.
                 let canonical_path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-                cfg.project_root = canonical_path
+                let project_root = canonical_path
                     .parent()
                     .map(|p| {
                         if p == std::path::Path::new("") {
@@ -333,7 +397,7 @@ impl Config {
                         }
                     })
                     .unwrap_or_else(|| canonical_path.clone());
-                cfg
+                Runtime { project_root, file }
             }
             None => {
                 // No config file found — use start_dir or CWD as the project root.
@@ -341,39 +405,39 @@ impl Config {
                     .map(|d| d.to_path_buf())
                     .or_else(|| std::env::current_dir().ok())
                     .unwrap_or_default();
-                Config {
+                Runtime {
                     project_root,
-                    ..Config::default()
+                    file: ConfigFile::default(),
                 }
             }
         };
 
         // Apply environment-variable overrides.
-        config.apply_env_overrides(env);
+        runtime.apply_env_overrides(env);
 
-        Ok(config)
+        Ok(runtime)
     }
 
     /// Apply CLI flag overrides on top of the loaded config (step 1 in the
-    /// precedence chain). Called by individual commands after [`Config::load`].
-    pub fn apply_cli_overrides(&mut self, overrides: &CliOverrides) {
+    /// precedence chain). Called by individual commands after [`Runtime::load`].
+    pub fn apply_cli_overrides(&mut self, overrides: &ConfigOverrides) {
         if let Some(v) = &overrides.database_path {
-            self.database_path = v.clone();
+            self.file.database_path = v.clone();
         }
         if let Some(v) = &overrides.migrations_dir {
-            self.migrations_dir = v.clone();
+            self.file.migrations_dir = v.clone();
         }
         if let Some(v) = &overrides.backups_dir {
-            self.backups_dir = v.clone();
+            self.file.backups_dir = v.clone();
         }
         if let Some(v) = overrides.auto_snapshot {
-            self.auto_snapshot = v;
+            self.file.auto_snapshot = v;
         }
         if let Some(v) = overrides.checksum_check {
-            self.checksum_check = v;
+            self.file.checksum_check = v;
         }
         if let Some(v) = &overrides.schema_path {
-            self.schema_path = v.clone();
+            self.file.schema_path = v.clone();
         }
     }
 
@@ -390,12 +454,59 @@ impl Config {
     }
 
     // -----------------------------------------------------------------------
+    // Path accessors
+    //
+    // Centralised so callers stop building paths from `project_root` + the
+    // raw string fields. Each accessor delegates to [`Self::resolve_path`],
+    // which preserves the `:memory:` token and absolute paths.
+    // -----------------------------------------------------------------------
+
+    /// Resolved path to the SQLite database.
+    ///
+    /// For the literal `":memory:"` this returns `PathBuf::from(":memory:")`
+    /// rather than a filesystem path. Callers that need to branch on the
+    /// in-memory case should use [`Self::is_memory_db`].
+    pub fn db_path(&self) -> PathBuf {
+        self.resolve_path(&self.file.database_path)
+    }
+
+    /// Whether [`ConfigFile::database_path`] is the literal `":memory:"` token.
+    pub fn is_memory_db(&self) -> bool {
+        self.file.database_path == ":memory:"
+    }
+
+    /// Resolved path to the migrations directory.
+    pub fn migrations_path(&self) -> PathBuf {
+        self.resolve_path(&self.file.migrations_dir)
+    }
+
+    /// Resolved path to the backups directory.
+    pub fn backups_path(&self) -> PathBuf {
+        self.resolve_path(&self.file.backups_dir)
+    }
+
+    /// Resolved path to the snapshots directory (`<backups>/snapshots`).
+    pub fn snapshots_path(&self) -> PathBuf {
+        self.backups_path().join("snapshots")
+    }
+
+    /// Resolved path to the reset-backups directory (`<backups>/resets`).
+    pub fn resets_path(&self) -> PathBuf {
+        self.backups_path().join("resets")
+    }
+
+    /// Resolved path to the schema manifest file.
+    pub fn schema_file_path(&self) -> PathBuf {
+        self.resolve_path(&self.file.schema_path)
+    }
+
+    // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
 
     /// Resolve the path to the config file using the precedence:
-    /// 1. `STIG_CONFIG` env var
-    /// 2. `override_path` argument
+    /// 1. `override_path` argument (e.g. `--config`)
+    /// 2. `STIG_CONFIG` env var
     /// 3. Upward search from `start_dir` (or CWD) for `stig.toml`
     ///
     /// Returns `None` if no config file is found (not an error).
@@ -404,16 +515,16 @@ impl Config {
         env: &E,
         start_dir: Option<&Path>,
     ) -> Option<PathBuf> {
-        // 1. STIG_CONFIG env var — always passed through so the caller gets a
+        // 1. Explicit override path — CLI flags beat environment variables.
+        if let Some(p) = override_path {
+            return Some(p.to_path_buf());
+        }
+
+        // 2. STIG_CONFIG env var — always passed through so the caller gets a
         // clear IO error if the file doesn't exist rather than silently falling
         // back to defaults.
         if let Some(p) = env.get_var("STIG_CONFIG") {
             return Some(PathBuf::from(p));
-        }
-
-        // 2. Explicit override path.
-        if let Some(p) = override_path {
-            return Some(p.to_path_buf());
         }
 
         // 3. Upward search from start_dir (or CWD).
@@ -449,49 +560,51 @@ impl Config {
             .get_var("STIG_DATABASE_PATH")
             .or_else(|| env.get_var("DATABASE_PATH"))
         {
-            self.database_path = v;
+            self.file.database_path = v;
         }
 
         // STIG_MIGRATIONS_DIR
         if let Some(v) = env.get_var("STIG_MIGRATIONS_DIR") {
-            self.migrations_dir = v;
+            self.file.migrations_dir = v;
         }
 
         // STIG_BACKUPS_DIR
         if let Some(v) = env.get_var("STIG_BACKUPS_DIR") {
-            self.backups_dir = v;
+            self.file.backups_dir = v;
         }
 
         // STIG_NO_SNAPSHOT — any non-empty value disables snapshots
         if let Some(v) = env.get_var("STIG_NO_SNAPSHOT")
             && !v.is_empty()
         {
-            self.auto_snapshot = false;
+            self.file.auto_snapshot = false;
         }
 
         // STIG_NO_CHECKSUM — any non-empty value disables checksum verification
         if let Some(v) = env.get_var("STIG_NO_CHECKSUM")
             && !v.is_empty()
         {
-            self.checksum_check = false;
+            self.file.checksum_check = false;
         }
 
         // STIG_SCHEMA_PATH
         if let Some(v) = env.get_var("STIG_SCHEMA_PATH") {
-            self.schema_path = v;
+            self.file.schema_path = v;
         }
     }
 
-    /// Serialize `self` to TOML and write it to `path`.
+    /// Serialize the on-disk fields of `self` to TOML and write them to `path`.
     ///
-    /// `project_root` is skipped by `#[serde(skip)]` and is never written.
+    /// Only the [`ConfigFile`] portion is serialised — `project_root` is a
+    /// runtime-only value derived from the file's location and is never
+    /// written.
     ///
     /// # Errors
     ///
     /// Returns [`CliError::Usage`] (exit 2) if serialization or the file write
     /// fails.
     pub fn write(&self, path: &Path) -> Result<(), CliError> {
-        let contents = toml::to_string_pretty(self)
+        let contents = toml::to_string_pretty(&self.file)
             .map_err(|e| CliError::Usage(format!("failed to serialize config: {e}")))?;
         std::fs::write(path, contents)
             .map_err(|e| CliError::Usage(format!("failed to write {}: {e}", path.display())))
@@ -531,13 +644,13 @@ mod tests {
     fn upward_search_finds_no_file_returns_defaults() {
         // Use a temp dir that is guaranteed to contain no stig.toml.
         let dir = TempDir::new().unwrap();
-        let cfg = Config::load(None, &empty_env(), Some(dir.path())).unwrap();
-        // Config values should all be defaults.
-        let defaults = Config::default();
-        assert_eq!(cfg.database_path, defaults.database_path);
-        assert_eq!(cfg.migrations_dir, defaults.migrations_dir);
-        assert_eq!(cfg.snapshot_keep, defaults.snapshot_keep);
-        assert_eq!(cfg.pragmas, defaults.pragmas);
+        let cfg = Runtime::load(None, &empty_env(), Some(dir.path())).unwrap();
+        // Runtime values should all match the on-disk defaults.
+        let defaults = ConfigFile::default();
+        assert_eq!(cfg.file.database_path, defaults.database_path);
+        assert_eq!(cfg.file.migrations_dir, defaults.migrations_dir);
+        assert_eq!(cfg.file.snapshot_keep, defaults.snapshot_keep);
+        assert_eq!(cfg.file.pragmas, defaults.pragmas);
         // project_root should be set to the start_dir we passed.
         assert_eq!(cfg.project_root, dir.path());
     }
@@ -549,20 +662,20 @@ mod tests {
         // path is absent without relying on a hard-coded system path.
         let dir = TempDir::new().unwrap();
         let absent = dir.path().join("no_such_stig.toml");
-        let result = Config::load(Some(&absent), &empty_env(), None);
+        let result = Runtime::load(Some(&absent), &empty_env(), None);
         assert!(matches!(result, Err(CliError::Usage(_))));
     }
 
     #[test]
     fn empty_config_file_returns_defaults() {
         let f = temp_toml("");
-        let cfg = Config::load(Some(f.path()), &empty_env(), None).unwrap();
-        let defaults = Config::default();
-        assert_eq!(cfg.database_path, defaults.database_path);
-        assert_eq!(cfg.migrations_dir, defaults.migrations_dir);
-        assert_eq!(cfg.snapshot_keep, defaults.snapshot_keep);
-        assert_eq!(cfg.pragmas, defaults.pragmas);
-        assert_eq!(cfg.generate, defaults.generate);
+        let cfg = Runtime::load(Some(f.path()), &empty_env(), None).unwrap();
+        let defaults = ConfigFile::default();
+        assert_eq!(cfg.file.database_path, defaults.database_path);
+        assert_eq!(cfg.file.migrations_dir, defaults.migrations_dir);
+        assert_eq!(cfg.file.snapshot_keep, defaults.snapshot_keep);
+        assert_eq!(cfg.file.pragmas, defaults.pragmas);
+        assert_eq!(cfg.file.generate, defaults.generate);
         // project_root should be the parent directory of the temp file.
         assert_eq!(
             cfg.project_root,
@@ -579,11 +692,11 @@ mod tests {
         let f = temp_toml(indoc! {r#"
             database_path = "my.db"
         "#});
-        let cfg = Config::load(Some(f.path()), &empty_env(), None).unwrap();
-        assert_eq!(cfg.database_path, "my.db");
-        assert_eq!(cfg.migrations_dir, "db/migrations"); // default
-        assert_eq!(cfg.snapshot_keep, 5); // default
-        assert_eq!(cfg.pragmas, Pragmas::default());
+        let cfg = Runtime::load(Some(f.path()), &empty_env(), None).unwrap();
+        assert_eq!(cfg.file.database_path, "my.db");
+        assert_eq!(cfg.file.migrations_dir, "db/migrations"); // default
+        assert_eq!(cfg.file.snapshot_keep, 5); // default
+        assert_eq!(cfg.file.pragmas, Pragmas::default());
     }
 
     // -----------------------------------------------------------------------
@@ -612,21 +725,21 @@ mod tests {
             exclude = ["sqlite_%"]
         "#});
 
-        let cfg = Config::load(Some(f.path()), &empty_env(), None).unwrap();
-        assert_eq!(cfg.database_path, "prod.db");
-        assert_eq!(cfg.migrations_dir, "migrations");
-        assert_eq!(cfg.backups_dir, "bk");
-        assert_eq!(cfg.snapshot_keep, 10);
-        assert_eq!(cfg.reset_keep, 2);
-        assert!(!cfg.auto_snapshot);
-        assert!(!cfg.checksum_check);
-        assert_eq!(cfg.pragmas.journal_mode, "DELETE");
-        assert_eq!(cfg.pragmas.foreign_keys, "OFF");
-        assert_eq!(cfg.generate.len(), 1);
-        assert_eq!(cfg.generate[0].kind, "typescript");
-        assert_eq!(cfg.generate[0].path, "types.ts");
-        assert_eq!(cfg.generate[0].name, None);
-        assert_eq!(cfg.generate[0].exclude, vec!["sqlite_%".to_string()]);
+        let cfg = Runtime::load(Some(f.path()), &empty_env(), None).unwrap();
+        assert_eq!(cfg.file.database_path, "prod.db");
+        assert_eq!(cfg.file.migrations_dir, "migrations");
+        assert_eq!(cfg.file.backups_dir, "bk");
+        assert_eq!(cfg.file.snapshot_keep, 10);
+        assert_eq!(cfg.file.reset_keep, 2);
+        assert!(!cfg.file.auto_snapshot);
+        assert!(!cfg.file.checksum_check);
+        assert_eq!(cfg.file.pragmas.journal_mode, "DELETE");
+        assert_eq!(cfg.file.pragmas.foreign_keys, "OFF");
+        assert_eq!(cfg.file.generate.len(), 1);
+        assert_eq!(cfg.file.generate[0].kind, "typescript");
+        assert_eq!(cfg.file.generate[0].path, "types.ts");
+        assert_eq!(cfg.file.generate[0].name, None);
+        assert_eq!(cfg.file.generate[0].exclude, vec!["sqlite_%".to_string()]);
         assert_eq!(
             cfg.project_root,
             f.path().parent().unwrap().canonicalize().unwrap()
@@ -645,8 +758,8 @@ mod tests {
 
         let env = MapEnv([("STIG_DATABASE_PATH".into(), "env.db".into())].into());
 
-        let cfg = Config::load(Some(f.path()), &env, None).unwrap();
-        assert_eq!(cfg.database_path, "env.db");
+        let cfg = Runtime::load(Some(f.path()), &env, None).unwrap();
+        assert_eq!(cfg.file.database_path, "env.db");
     }
 
     #[test]
@@ -657,8 +770,8 @@ mod tests {
 
         let env = MapEnv([("DATABASE_PATH".into(), "fallback.db".into())].into());
 
-        let cfg = Config::load(Some(f.path()), &env, None).unwrap();
-        assert_eq!(cfg.database_path, "fallback.db");
+        let cfg = Runtime::load(Some(f.path()), &env, None).unwrap();
+        assert_eq!(cfg.file.database_path, "fallback.db");
     }
 
     #[test]
@@ -673,8 +786,8 @@ mod tests {
             .into(),
         );
 
-        let cfg = Config::load(Some(f.path()), &env, None).unwrap();
-        assert_eq!(cfg.database_path, "stig.db");
+        let cfg = Runtime::load(Some(f.path()), &env, None).unwrap();
+        assert_eq!(cfg.file.database_path, "stig.db");
     }
 
     #[test]
@@ -683,8 +796,8 @@ mod tests {
 
         let env = MapEnv([("STIG_MIGRATIONS_DIR".into(), "custom/migrations".into())].into());
 
-        let cfg = Config::load(Some(f.path()), &env, None).unwrap();
-        assert_eq!(cfg.migrations_dir, "custom/migrations");
+        let cfg = Runtime::load(Some(f.path()), &env, None).unwrap();
+        assert_eq!(cfg.file.migrations_dir, "custom/migrations");
     }
 
     #[test]
@@ -693,8 +806,8 @@ mod tests {
 
         let env = MapEnv([("STIG_BACKUPS_DIR".into(), "custom/backups".into())].into());
 
-        let cfg = Config::load(Some(f.path()), &env, None).unwrap();
-        assert_eq!(cfg.backups_dir, "custom/backups");
+        let cfg = Runtime::load(Some(f.path()), &env, None).unwrap();
+        assert_eq!(cfg.file.backups_dir, "custom/backups");
     }
 
     #[test]
@@ -703,8 +816,8 @@ mod tests {
 
         let env = MapEnv([("STIG_NO_SNAPSHOT".into(), "1".into())].into());
 
-        let cfg = Config::load(Some(f.path()), &env, None).unwrap();
-        assert!(!cfg.auto_snapshot);
+        let cfg = Runtime::load(Some(f.path()), &env, None).unwrap();
+        assert!(!cfg.file.auto_snapshot);
     }
 
     #[test]
@@ -713,8 +826,8 @@ mod tests {
 
         let env = MapEnv([("STIG_NO_SNAPSHOT".into(), "".into())].into());
 
-        let cfg = Config::load(Some(f.path()), &env, None).unwrap();
-        assert!(cfg.auto_snapshot);
+        let cfg = Runtime::load(Some(f.path()), &env, None).unwrap();
+        assert!(cfg.file.auto_snapshot);
     }
 
     #[test]
@@ -723,8 +836,8 @@ mod tests {
 
         let env = MapEnv([("STIG_NO_CHECKSUM".into(), "true".into())].into());
 
-        let cfg = Config::load(Some(f.path()), &env, None).unwrap();
-        assert!(!cfg.checksum_check);
+        let cfg = Runtime::load(Some(f.path()), &env, None).unwrap();
+        assert!(!cfg.file.checksum_check);
     }
 
     #[test]
@@ -733,8 +846,8 @@ mod tests {
 
         let env = MapEnv([("STIG_SCHEMA_PATH".into(), "custom/schema.sql".into())].into());
 
-        let cfg = Config::load(Some(f.path()), &env, None).unwrap();
-        assert_eq!(cfg.schema_path, "custom/schema.sql");
+        let cfg = Runtime::load(Some(f.path()), &env, None).unwrap();
+        assert_eq!(cfg.file.schema_path, "custom/schema.sql");
     }
 
     // -----------------------------------------------------------------------
@@ -749,61 +862,61 @@ mod tests {
 
         let env = MapEnv([("STIG_DATABASE_PATH".into(), "env.db".into())].into());
 
-        let mut cfg = Config::load(Some(f.path()), &env, None).unwrap();
-        assert_eq!(cfg.database_path, "env.db"); // env beat file
+        let mut cfg = Runtime::load(Some(f.path()), &env, None).unwrap();
+        assert_eq!(cfg.file.database_path, "env.db"); // env beat file
 
-        let overrides = CliOverrides {
+        let overrides = ConfigOverrides {
             database_path: Some("cli.db".into()),
             ..Default::default()
         };
         cfg.apply_cli_overrides(&overrides);
-        assert_eq!(cfg.database_path, "cli.db"); // CLI beats env
+        assert_eq!(cfg.file.database_path, "cli.db"); // CLI beats env
     }
 
     #[test]
     fn cli_overrides_partial_leaves_other_fields_unchanged() {
         let f = temp_toml("");
 
-        let mut cfg = Config::load(Some(f.path()), &empty_env(), None).unwrap();
-        let original_migrations_dir = cfg.migrations_dir.clone();
+        let mut cfg = Runtime::load(Some(f.path()), &empty_env(), None).unwrap();
+        let original_migrations_dir = cfg.file.migrations_dir.clone();
 
-        let overrides = CliOverrides {
+        let overrides = ConfigOverrides {
             database_path: Some("cli.db".into()),
             ..Default::default()
         };
         cfg.apply_cli_overrides(&overrides);
-        assert_eq!(cfg.database_path, "cli.db");
-        assert_eq!(cfg.migrations_dir, original_migrations_dir); // untouched
+        assert_eq!(cfg.file.database_path, "cli.db");
+        assert_eq!(cfg.file.migrations_dir, original_migrations_dir); // untouched
     }
 
     #[test]
     fn cli_override_auto_snapshot_false() {
         let f = temp_toml("auto_snapshot = true");
 
-        let mut cfg = Config::load(Some(f.path()), &empty_env(), None).unwrap();
-        assert!(cfg.auto_snapshot);
+        let mut cfg = Runtime::load(Some(f.path()), &empty_env(), None).unwrap();
+        assert!(cfg.file.auto_snapshot);
 
-        let overrides = CliOverrides {
+        let overrides = ConfigOverrides {
             auto_snapshot: Some(false),
             ..Default::default()
         };
         cfg.apply_cli_overrides(&overrides);
-        assert!(!cfg.auto_snapshot);
+        assert!(!cfg.file.auto_snapshot);
     }
 
     #[test]
     fn cli_override_schema_path() {
         let f = temp_toml("");
 
-        let mut cfg = Config::load(Some(f.path()), &empty_env(), None).unwrap();
-        assert_eq!(cfg.schema_path, "db/schema.sql");
+        let mut cfg = Runtime::load(Some(f.path()), &empty_env(), None).unwrap();
+        assert_eq!(cfg.file.schema_path, "db/schema.sql");
 
-        let overrides = CliOverrides {
+        let overrides = ConfigOverrides {
             schema_path: Some("custom/schema.sql".into()),
             ..Default::default()
         };
         cfg.apply_cli_overrides(&overrides);
-        assert_eq!(cfg.schema_path, "custom/schema.sql");
+        assert_eq!(cfg.file.schema_path, "custom/schema.sql");
     }
 
     // -----------------------------------------------------------------------
@@ -814,7 +927,7 @@ mod tests {
     fn invalid_toml_returns_usage_error() {
         let f = temp_toml("this is not : valid = toml [[[");
 
-        let result = Config::load(Some(f.path()), &empty_env(), None);
+        let result = Runtime::load(Some(f.path()), &empty_env(), None);
         assert!(result.is_err());
         assert!(
             matches!(result.unwrap_err(), CliError::Usage(_)),
@@ -827,7 +940,7 @@ mod tests {
         // snapshot_keep expects u32, not a string
         let f = temp_toml(r#"snapshot_keep = "five""#);
 
-        let result = Config::load(Some(f.path()), &empty_env(), None);
+        let result = Runtime::load(Some(f.path()), &empty_env(), None);
         assert!(matches!(result, Err(CliError::Usage(_))));
     }
 
@@ -836,11 +949,11 @@ mod tests {
     // -----------------------------------------------------------------------
 
     #[test]
-    fn stig_config_env_var_used_over_override_path() {
+    fn override_path_takes_priority_over_stig_config_env() {
         // File A: via STIG_CONFIG
         let fa = temp_toml(r#"database_path = "from_stig_config.db""#);
 
-        // File B: via override_path argument (should be ignored)
+        // File B: via override_path argument (should win)
         let fb = temp_toml(r#"database_path = "from_override.db""#);
 
         let env = MapEnv(
@@ -851,8 +964,8 @@ mod tests {
             .into(),
         );
 
-        let cfg = Config::load(Some(fb.path()), &env, None).unwrap();
-        assert_eq!(cfg.database_path, "from_stig_config.db");
+        let cfg = Runtime::load(Some(fb.path()), &env, None).unwrap();
+        assert_eq!(cfg.file.database_path, "from_override.db");
     }
 
     // -----------------------------------------------------------------------
@@ -884,8 +997,8 @@ mod tests {
             .into(),
         );
 
-        let cfg = Config::load(None, &env, None).unwrap();
-        assert_eq!(cfg.database_path, "app.db");
+        let cfg = Runtime::load(None, &env, None).unwrap();
+        assert_eq!(cfg.file.database_path, "app.db");
         assert_eq!(cfg.project_root, dir.path().canonicalize().unwrap());
         assert_ne!(cfg.project_root, std::path::PathBuf::new());
         assert_ne!(cfg.project_root, std::path::Path::new(""));
@@ -903,7 +1016,7 @@ mod tests {
 
         // Pass a different start_dir — project_root must still come from the
         // config file's location, not from start_dir.
-        let cfg = Config::load(Some(&config_file), &empty_env(), Some(start_dir.path())).unwrap();
+        let cfg = Runtime::load(Some(&config_file), &empty_env(), Some(start_dir.path())).unwrap();
 
         assert_eq!(cfg.project_root, config_dir.path().canonicalize().unwrap());
         assert_ne!(cfg.project_root, start_dir.path().canonicalize().unwrap());
@@ -921,14 +1034,14 @@ mod tests {
     fn injected_env_map_is_used_exclusively() {
         let env = empty_env();
         let f = temp_toml("");
-        let cfg = Config::load(Some(f.path()), &env, None).unwrap();
+        let cfg = Runtime::load(Some(f.path()), &env, None).unwrap();
 
         // With an empty injected map, no env overrides should apply.
-        assert_eq!(cfg.database_path, Config::default().database_path);
+        assert_eq!(cfg.file.database_path, ConfigFile::default().database_path);
     }
 
     // -----------------------------------------------------------------------
-    // Config::write round-trip tests
+    // Runtime::write round-trip tests
     // -----------------------------------------------------------------------
 
     #[test]
@@ -936,23 +1049,23 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("stig.toml");
 
-        let original = Config {
+        let original = Runtime {
             project_root: dir.path().to_path_buf(),
-            ..Config::default()
+            file: ConfigFile::default(),
         };
         original.write(&path).unwrap();
 
-        let loaded = Config::load(Some(&path), &empty_env(), None).unwrap();
-        assert_eq!(loaded.database_path, original.database_path);
-        assert_eq!(loaded.migrations_dir, original.migrations_dir);
-        assert_eq!(loaded.backups_dir, original.backups_dir);
-        assert_eq!(loaded.snapshot_keep, original.snapshot_keep);
-        assert_eq!(loaded.reset_keep, original.reset_keep);
-        assert_eq!(loaded.auto_snapshot, original.auto_snapshot);
-        assert_eq!(loaded.checksum_check, original.checksum_check);
-        assert_eq!(loaded.pragmas, original.pragmas);
-        assert_eq!(loaded.generate, original.generate);
-        assert_eq!(loaded.schema_path, original.schema_path);
+        let loaded = Runtime::load(Some(&path), &empty_env(), None).unwrap();
+        assert_eq!(loaded.file.database_path, original.file.database_path);
+        assert_eq!(loaded.file.migrations_dir, original.file.migrations_dir);
+        assert_eq!(loaded.file.backups_dir, original.file.backups_dir);
+        assert_eq!(loaded.file.snapshot_keep, original.file.snapshot_keep);
+        assert_eq!(loaded.file.reset_keep, original.file.reset_keep);
+        assert_eq!(loaded.file.auto_snapshot, original.file.auto_snapshot);
+        assert_eq!(loaded.file.checksum_check, original.file.checksum_check);
+        assert_eq!(loaded.file.pragmas, original.file.pragmas);
+        assert_eq!(loaded.file.generate, original.file.generate);
+        assert_eq!(loaded.file.schema_path, original.file.schema_path);
     }
 
     #[test]
@@ -960,26 +1073,28 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("stig.toml");
 
-        let original = Config {
+        let original = Runtime {
             project_root: dir.path().to_path_buf(),
-            database_path: "prod.db".to_string(),
-            migrations_dir: "schema/migrations".to_string(),
-            snapshot_keep: 10,
-            auto_snapshot: false,
-            pragmas: Pragmas {
-                journal_mode: "DELETE".to_string(),
-                foreign_keys: "ON".to_string(),
+            file: ConfigFile {
+                database_path: "prod.db".to_string(),
+                migrations_dir: "schema/migrations".to_string(),
+                snapshot_keep: 10,
+                auto_snapshot: false,
+                pragmas: Pragmas {
+                    journal_mode: "DELETE".to_string(),
+                    foreign_keys: "ON".to_string(),
+                },
+                ..ConfigFile::default()
             },
-            ..Config::default()
         };
         original.write(&path).unwrap();
 
-        let loaded = Config::load(Some(&path), &empty_env(), None).unwrap();
-        assert_eq!(loaded.database_path, "prod.db");
-        assert_eq!(loaded.migrations_dir, "schema/migrations");
-        assert_eq!(loaded.snapshot_keep, 10);
-        assert!(!loaded.auto_snapshot);
-        assert_eq!(loaded.pragmas.journal_mode, "DELETE");
+        let loaded = Runtime::load(Some(&path), &empty_env(), None).unwrap();
+        assert_eq!(loaded.file.database_path, "prod.db");
+        assert_eq!(loaded.file.migrations_dir, "schema/migrations");
+        assert_eq!(loaded.file.snapshot_keep, 10);
+        assert!(!loaded.file.auto_snapshot);
+        assert_eq!(loaded.file.pragmas.journal_mode, "DELETE");
     }
 
     #[test]
@@ -987,9 +1102,9 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = dir.path().join("stig.toml");
 
-        let cfg = Config {
+        let cfg = Runtime {
             project_root: dir.path().to_path_buf(),
-            ..Config::default()
+            file: ConfigFile::default(),
         };
         cfg.write(&path).unwrap();
 
@@ -1012,29 +1127,96 @@ mod tests {
             toml::Value::String("// auto-generated".to_string()),
         );
 
-        let original = Config {
+        let original = Runtime {
             project_root: dir.path().to_path_buf(),
-            generate: vec![GenerateTarget {
-                kind: "typescript".to_string(),
-                path: "types.ts".to_string(),
-                name: Some("my-types".to_string()),
-                format: None,
-                exclude: vec!["sqlite_%".to_string()],
-                extra,
-            }],
-            ..Config::default()
+            file: ConfigFile {
+                generate: vec![GenerateTarget {
+                    kind: "typescript".to_string(),
+                    path: "types.ts".to_string(),
+                    name: Some("my-types".to_string()),
+                    format: None,
+                    exclude: vec!["sqlite_%".to_string()],
+                    extra,
+                }],
+                ..ConfigFile::default()
+            },
         };
         original.write(&path).unwrap();
 
-        let loaded = Config::load(Some(&path), &empty_env(), None).unwrap();
-        assert_eq!(loaded.generate.len(), 1);
+        let loaded = Runtime::load(Some(&path), &empty_env(), None).unwrap();
+        assert_eq!(loaded.file.generate.len(), 1);
         assert_eq!(
-            loaded.generate[0].extra.get("indent"),
+            loaded.file.generate[0].extra.get("indent"),
             Some(&toml::Value::Integer(4))
         );
         assert_eq!(
-            loaded.generate[0].extra.get("header"),
+            loaded.file.generate[0].extra.get("header"),
             Some(&toml::Value::String("// auto-generated".to_string()))
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Path accessors
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn path_accessors_resolve_relative_paths_against_project_root() {
+        let dir = TempDir::new().unwrap();
+        let cfg = Runtime {
+            project_root: dir.path().to_path_buf(),
+            file: ConfigFile::default(),
+        };
+
+        assert_eq!(cfg.db_path(), dir.path().join("app.db"));
+        assert_eq!(cfg.migrations_path(), dir.path().join("db/migrations"));
+        assert_eq!(cfg.backups_path(), dir.path().join("db"));
+        assert_eq!(
+            cfg.snapshots_path(),
+            dir.path().join("db").join("snapshots")
+        );
+        assert_eq!(cfg.resets_path(), dir.path().join("db").join("resets"));
+        assert_eq!(cfg.schema_file_path(), dir.path().join("db/schema.sql"));
+        assert!(!cfg.is_memory_db());
+    }
+
+    #[test]
+    fn db_path_preserves_memory_token_and_is_memory_db_detects_it() {
+        let dir = TempDir::new().unwrap();
+        let cfg = Runtime {
+            project_root: dir.path().to_path_buf(),
+            file: ConfigFile {
+                database_path: ":memory:".to_string(),
+                ..ConfigFile::default()
+            },
+        };
+
+        assert_eq!(cfg.db_path(), PathBuf::from(":memory:"));
+        assert!(cfg.is_memory_db());
+    }
+
+    #[test]
+    fn path_accessors_preserve_absolute_paths() {
+        let dir = TempDir::new().unwrap();
+        let cfg = Runtime {
+            project_root: dir.path().to_path_buf(),
+            file: ConfigFile {
+                database_path: "/var/lib/app/data.db".to_string(),
+                migrations_dir: "/etc/app/migrations".to_string(),
+                backups_dir: "/srv/backups".to_string(),
+                schema_path: "/etc/app/schema.sql".to_string(),
+                ..ConfigFile::default()
+            },
+        };
+
+        assert_eq!(cfg.db_path(), PathBuf::from("/var/lib/app/data.db"));
+        assert_eq!(cfg.migrations_path(), PathBuf::from("/etc/app/migrations"));
+        assert_eq!(cfg.backups_path(), PathBuf::from("/srv/backups"));
+        assert_eq!(
+            cfg.snapshots_path(),
+            PathBuf::from("/srv/backups/snapshots")
+        );
+        assert_eq!(cfg.resets_path(), PathBuf::from("/srv/backups/resets"));
+        assert_eq!(cfg.schema_file_path(), PathBuf::from("/etc/app/schema.sql"));
+        assert!(!cfg.is_memory_db());
     }
 }

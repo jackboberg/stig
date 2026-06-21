@@ -1,6 +1,6 @@
 //! SQLite connection layer for `stig`.
 //!
-//! Opens a [`rusqlite::Connection`] at the path specified in [`Config`],
+//! Opens a [`rusqlite::Connection`] at the path specified in [`Runtime`],
 //! applies PRAGMAs from config, and exposes [`Db::checkpoint`] and
 //! [`Db::close`] helpers used by snapshot and reset operations.
 //!
@@ -26,7 +26,7 @@ use rusqlite::Connection;
 use rusqlite::params;
 use tracing::warn;
 
-use crate::config::Config;
+use crate::config::Runtime;
 use crate::migrate::plan::PlannedMigration;
 use crate::snapshot;
 
@@ -50,11 +50,9 @@ impl Db {
     /// - For `:memory:`: skips `journal_mode` (WAL-incompatible) and emits a
     ///   warning that snapshot/reset operations are not supported in this mode.  `foreign_keys` is
     ///   still applied.
-    pub fn open(config: &Config) -> Result<Self> {
-        let raw = &config.database_path;
-        let is_memory = raw == ":memory:";
-
-        let resolved = config.resolve_path(raw);
+    pub fn open(config: &Runtime) -> Result<Self> {
+        let is_memory = config.is_memory_db();
+        let resolved = config.db_path();
 
         let conn = if is_memory {
             warn!(
@@ -68,7 +66,7 @@ impl Db {
 
         let db = Self { conn, is_memory };
 
-        db.apply_pragmas(&config.pragmas)?;
+        db.apply_pragmas(&config.file.pragmas)?;
 
         Ok(db)
     }
@@ -246,19 +244,25 @@ mod tests {
     use tempfile::NamedTempFile;
 
     use super::*;
-    use crate::config::Config;
+    use crate::config::{ConfigFile, Runtime};
 
-    fn file_config(path: &str) -> Config {
-        Config {
-            database_path: path.to_string(),
-            ..Config::default()
+    fn file_config(path: &str) -> Runtime {
+        Runtime {
+            project_root: std::path::PathBuf::new(),
+            file: ConfigFile {
+                database_path: path.to_string(),
+                ..ConfigFile::default()
+            },
         }
     }
 
-    fn memory_config() -> Config {
-        Config {
-            database_path: ":memory:".to_string(),
-            ..Config::default()
+    fn memory_config() -> Runtime {
+        Runtime {
+            project_root: std::path::PathBuf::new(),
+            file: ConfigFile {
+                database_path: ":memory:".to_string(),
+                ..ConfigFile::default()
+            },
         }
     }
 
@@ -294,7 +298,7 @@ mod tests {
     fn open_file_db_respects_configured_journal_mode() {
         let tmp = NamedTempFile::new().unwrap();
         let mut cfg = file_config(tmp.path().to_str().unwrap());
-        cfg.pragmas.journal_mode = "DELETE".to_string();
+        cfg.file.pragmas.journal_mode = "DELETE".to_string();
         let db = Db::open(&cfg).expect("open failed");
 
         let mode: String = db
@@ -424,7 +428,7 @@ mod tests {
     fn open_rejects_invalid_journal_mode() {
         let tmp = NamedTempFile::new().unwrap();
         let mut cfg = file_config(tmp.path().to_str().unwrap());
-        cfg.pragmas.journal_mode = "INVALID; --".to_string();
+        cfg.file.pragmas.journal_mode = "INVALID; --".to_string();
         assert!(Db::open(&cfg).is_err());
     }
 
@@ -432,7 +436,7 @@ mod tests {
     fn open_rejects_invalid_foreign_keys() {
         let tmp = NamedTempFile::new().unwrap();
         let mut cfg = file_config(tmp.path().to_str().unwrap());
-        cfg.pragmas.foreign_keys = "ON; DROP TABLE x".to_string();
+        cfg.file.pragmas.foreign_keys = "ON; DROP TABLE x".to_string();
         assert!(Db::open(&cfg).is_err());
     }
 
@@ -441,10 +445,12 @@ mod tests {
     #[test]
     fn open_resolves_relative_path_against_project_root() {
         let dir = tempfile::tempdir().unwrap();
-        let cfg = Config {
+        let cfg = Runtime {
             project_root: dir.path().to_path_buf(),
-            database_path: "relative.db".to_string(),
-            ..Config::default()
+            file: ConfigFile {
+                database_path: "relative.db".to_string(),
+                ..ConfigFile::default()
+            },
         };
         let db = Db::open(&cfg).expect("should open relative path against project_root");
         // Verify the file was created inside project_root, not CWD.
@@ -455,11 +461,13 @@ mod tests {
     #[test]
     fn open_uses_absolute_path_as_is() {
         let tmp = NamedTempFile::new().unwrap();
-        let cfg = Config {
+        let cfg = Runtime {
             // project_root is irrelevant when path is absolute
             project_root: std::path::PathBuf::from("/nonexistent"),
-            database_path: tmp.path().to_str().unwrap().to_string(),
-            ..Config::default()
+            file: ConfigFile {
+                database_path: tmp.path().to_str().unwrap().to_string(),
+                ..ConfigFile::default()
+            },
         };
         assert!(Db::open(&cfg).is_ok());
     }

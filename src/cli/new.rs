@@ -15,14 +15,12 @@ use std::path::{Path, PathBuf};
 use anyhow::Context as _;
 use chrono::{DateTime, Utc};
 
-use crate::config::Config;
-use crate::config::env_source::ProcessEnv;
+use crate::config::Runtime;
 use crate::errors::CliError;
 
 /// Run `stig new <description> [--no-edit]`.
-pub fn run(description: String, no_edit: bool) -> anyhow::Result<()> {
-    let config = Config::load(None, &ProcessEnv, None)?;
-    let migrations_dir = config.project_root.join(&config.migrations_dir);
+pub fn run(description: String, no_edit: bool, config: &Runtime) -> anyhow::Result<()> {
+    let migrations_dir = config.migrations_path();
 
     if !migrations_dir.is_dir() {
         return Err(CliError::Usage(

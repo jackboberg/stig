@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 
-use crate::config::Config;
-use crate::config::env_source::ProcessEnv;
+use crate::config::Runtime;
 use crate::db::{Db, ensure_schema_migrations, format_drift_messages};
 use crate::errors::CliError;
 use crate::migrate::discover::discover;
@@ -9,11 +8,8 @@ use crate::migrate::plan::{MigrationStatus, Plan};
 use crate::snapshot;
 
 /// Run `stig status`.
-pub fn run() -> Result<()> {
-    let config = Config::load(None, &ProcessEnv, None)?;
-    let project_root = &config.project_root;
-
-    let migrations_dir = project_root.join(&config.migrations_dir);
+pub fn run(config: &Runtime) -> Result<()> {
+    let migrations_dir = config.migrations_path();
     if !migrations_dir.is_dir() {
         return Err(CliError::Prerequisite(format!(
             "migrations directory not found: {}",
@@ -22,22 +18,26 @@ pub fn run() -> Result<()> {
         .into());
     }
 
-    let db = Db::open(&config)
-        .with_context(|| format!("failed to open database at {}", config.database_path))?;
+    let db = Db::open(config)
+        .with_context(|| format!("failed to open database at {}", config.file.database_path))?;
 
     ensure_schema_migrations(db.connection())?;
 
     let files = discover(&migrations_dir).context("failed to discover migration files")?;
     let plan = Plan::build(&files, db.connection())?;
 
-    let snapshots_dir = project_root.join(&config.backups_dir).join("snapshots");
+    let snapshots_dir = config.snapshots_path();
 
     // Header
-    println!("database: {}", config.database_path);
-    println!("migrations dir: {}", config.migrations_dir);
+    println!("database: {}", config.file.database_path);
+    println!("migrations dir: {}", config.file.migrations_dir);
     println!(
         "checksum check: {}",
-        if config.checksum_check { "on" } else { "off" }
+        if config.file.checksum_check {
+            "on"
+        } else {
+            "off"
+        }
     );
     println!();
 
@@ -64,7 +64,7 @@ pub fn run() -> Result<()> {
             }
             MigrationStatus::Applied { drifted, .. } => {
                 n_applied += 1;
-                let drift_display = if config.checksum_check {
+                let drift_display = if config.file.checksum_check {
                     if *drifted {
                         n_drifted += 1;
                         "yes"
@@ -100,14 +100,14 @@ pub fn run() -> Result<()> {
 
     // Summary
     println!();
-    if config.checksum_check {
+    if config.file.checksum_check {
         println!("summary: {n_applied} applied, {n_pending} pending, {n_drifted} drifted");
     } else {
         println!("summary: {n_applied} applied, {n_pending} pending");
     }
 
     // Exit 3 on drift
-    if config.checksum_check && n_drifted > 0 {
+    if config.file.checksum_check && n_drifted > 0 {
         let msg = format_drift_messages(&plan.drifted(), &snapshots_dir);
         return Err(CliError::Drift(msg).into());
     }

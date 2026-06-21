@@ -1,12 +1,55 @@
+use std::path::PathBuf;
+
 use clap::{Parser, Subcommand};
 use stig::cli::{BackupsCommand, SchemaCommand};
+use stig::config::{ConfigOverrides, RunContext};
 use stig::errors::CliError;
 
 #[derive(Debug, Parser)]
 #[command(name = "stig", about = "A SQLite migration and schema CLI", version)]
 struct Cli {
+    /// Path to the configuration file
+    #[arg(long, global = true)]
+    config: Option<PathBuf>,
+
+    /// Path to the SQLite database
+    #[arg(long, global = true)]
+    database_path: Option<String>,
+
+    /// Directory containing migration files
+    #[arg(long, global = true)]
+    migrations_dir: Option<String>,
+
+    /// Directory for snapshots and reset backups
+    #[arg(long, global = true)]
+    backups_dir: Option<String>,
+
+    /// Path to the schema manifest file
+    #[arg(long, global = true)]
+    schema_path: Option<String>,
+
+    /// Disable automatic pre-migration snapshots
+    #[arg(long, global = true)]
+    no_snapshot: bool,
+
+    /// Skip checksum drift detection
+    #[arg(long, global = true)]
+    no_checksum: bool,
+
     #[command(subcommand)]
     command: Command,
+}
+
+/// Build a [`ConfigOverrides`] value from the parsed global flags.
+fn config_overrides(cli: &Cli) -> ConfigOverrides {
+    ConfigOverrides {
+        database_path: cli.database_path.clone(),
+        migrations_dir: cli.migrations_dir.clone(),
+        backups_dir: cli.backups_dir.clone(),
+        auto_snapshot: cli.no_snapshot.then_some(false),
+        checksum_check: cli.no_checksum.then_some(false),
+        schema_path: cli.schema_path.clone(),
+    }
 }
 
 #[derive(Debug, Subcommand)]
@@ -70,22 +113,37 @@ enum Command {
 
 fn main() {
     let cli = Cli::parse();
-
-    let result: Result<(), anyhow::Error> = match cli.command {
-        Command::Init => stig::cli::init::run(),
-        Command::New {
-            description,
-            no_edit,
-        } => stig::cli::new::run(description, no_edit),
-        Command::Migrate { dry_run } => stig::cli::migrate::run(dry_run),
-        Command::Status => stig::cli::status::run(),
-        Command::Redo { version, yes } => stig::cli::redo::run(version, yes),
-        Command::Reset { yes } => stig::cli::reset::run(yes),
-        Command::Restore { timestamp, yes } => stig::cli::restore::run(timestamp, yes),
-        Command::Generate { target_name } => stig::cli::generate::run(target_name),
-        Command::Backups { command } => stig::cli::backups::run(command),
-        Command::Schema { command } => stig::cli::schema::run(command),
+    let ctx = RunContext {
+        config_path: cli.config.clone(),
+        overrides: config_overrides(&cli),
     };
+
+    let result: Result<(), anyhow::Error> = (|| match cli.command {
+        // `stig init --config <path>` targets a file that does not exist yet,
+        // so Runtime::load would fail before init has a chance to create it.
+        // init resolves what it needs directly from RunContext.
+        Command::Init => stig::cli::init::run(&ctx),
+        command => {
+            let config = ctx.load_config()?;
+            match command {
+                Command::New {
+                    description,
+                    no_edit,
+                } => stig::cli::new::run(description, no_edit, &config),
+                Command::Migrate { dry_run } => stig::cli::migrate::run(dry_run, &config),
+                Command::Status => stig::cli::status::run(&config),
+                Command::Redo { version, yes } => stig::cli::redo::run(version, yes, &config),
+                Command::Reset { yes } => stig::cli::reset::run(yes, &config),
+                Command::Restore { timestamp, yes } => {
+                    stig::cli::restore::run(timestamp, yes, &config)
+                }
+                Command::Generate { target_name } => stig::cli::generate::run(target_name, &config),
+                Command::Backups { command } => stig::cli::backups::run(command, &config),
+                Command::Schema { command } => stig::cli::schema::run(command, &config),
+                Command::Init => unreachable!(),
+            }
+        }
+    })();
 
     if let Err(e) = result {
         let cli_err = e.downcast::<CliError>().unwrap_or_else(CliError::classify);

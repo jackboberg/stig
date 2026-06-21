@@ -3,25 +3,21 @@ use std::time::Duration;
 use anyhow::Context;
 
 use crate::cli::BackupsCommand;
-use crate::config::Config;
-use crate::config::env_source::ProcessEnv;
+use crate::config::Runtime;
 use crate::errors::CliError;
 use crate::snapshot;
 
 /// Run `stig backups <subcommand>`.
-pub fn run(command: BackupsCommand) -> anyhow::Result<()> {
+pub fn run(command: BackupsCommand, config: &Runtime) -> anyhow::Result<()> {
     match command {
-        BackupsCommand::List => list(),
-        BackupsCommand::Prune { yes } => prune(yes),
+        BackupsCommand::List => list(config),
+        BackupsCommand::Prune { yes } => prune(yes, config),
     }
 }
 
-fn list() -> anyhow::Result<()> {
-    let config = Config::load(None, &ProcessEnv, None)?;
-
-    let backups_dir = config.project_root.join(&config.backups_dir);
-    let snapshots_dir = backups_dir.join("snapshots");
-    let resets_dir = backups_dir.join("resets");
+fn list(config: &Runtime) -> anyhow::Result<()> {
+    let snapshots_dir = config.snapshots_path();
+    let resets_dir = config.resets_path();
 
     let snapshots = snapshot::list_backups(&snapshots_dir, "pre-")?;
     let resets = snapshot::list_backups(&resets_dir, "reset-")?;
@@ -29,7 +25,7 @@ fn list() -> anyhow::Result<()> {
     println!(
         "snapshots ({} of max {}):",
         snapshots.len(),
-        config.snapshot_keep
+        config.file.snapshot_keep
     );
     for entry in &snapshots {
         println!(
@@ -41,7 +37,11 @@ fn list() -> anyhow::Result<()> {
     }
 
     println!();
-    println!("resets ({} of max {}):", resets.len(), config.reset_keep);
+    println!(
+        "resets ({} of max {}):",
+        resets.len(),
+        config.file.reset_keep
+    );
     for entry in &resets {
         println!(
             "  {:<36} {:>8}   {} ago",
@@ -54,18 +54,15 @@ fn list() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn prune(yes: bool) -> anyhow::Result<()> {
-    let config = Config::load(None, &ProcessEnv, None)?;
-
+fn prune(yes: bool, config: &Runtime) -> anyhow::Result<()> {
     confirm_or_abort(yes)?;
 
-    let backups_dir = config.project_root.join(&config.backups_dir);
-    let snapshots_dir = backups_dir.join("snapshots");
-    let resets_dir = backups_dir.join("resets");
+    let snapshots_dir = config.snapshots_path();
+    let resets_dir = config.resets_path();
 
-    snapshot::prune_snapshots(&snapshots_dir, config.snapshot_keep)
+    snapshot::prune_snapshots(&snapshots_dir, config.file.snapshot_keep)
         .context("failed to prune snapshots")?;
-    snapshot::prune_resets(&resets_dir, config.reset_keep)
+    snapshot::prune_resets(&resets_dir, config.file.reset_keep)
         .context("failed to prune reset backups")?;
 
     println!("✓ backups pruned");
