@@ -86,7 +86,6 @@ impl From<CodegenError> for CliError {
 pub struct CodegenConfig {
     pub path: PathBuf,
     pub exclude: Vec<String>,
-    pub format: Option<String>,
     pub extra: toml::Table,
 }
 
@@ -185,7 +184,6 @@ pub fn run_targets(
         let config = CodegenConfig {
             path: project_root.join(&entry.path),
             exclude,
-            format: entry.format.clone(),
             extra: entry.extra.clone(),
         };
 
@@ -262,7 +260,6 @@ mod tests {
         let config = CodegenConfig {
             path: dir.path().join("out/noop.txt"),
             exclude: vec![],
-            format: None,
             extra: toml::Table::new(),
         };
 
@@ -284,7 +281,6 @@ mod tests {
             kind: "nonexistent".to_string(),
             path: "out.txt".to_string(),
             name: None,
-            format: None,
             exclude: vec![],
             extra: toml::Table::new(),
         };
@@ -316,7 +312,6 @@ mod tests {
             kind: "__test_noop__".to_string(),
             path: "alpha.txt".to_string(),
             name: Some("alpha".to_string()),
-            format: None,
             exclude: vec![],
             extra: toml::Table::new(),
         };
@@ -324,7 +319,6 @@ mod tests {
             kind: "__test_noop__".to_string(),
             path: "beta.txt".to_string(),
             name: Some("beta".to_string()),
-            format: None,
             exclude: vec![],
             extra: toml::Table::new(),
         };
@@ -354,7 +348,6 @@ mod tests {
             kind: "__test_ts__".to_string(),
             path: "types.ts".to_string(),
             name: Some("my-types".to_string()),
-            format: None,
             exclude: vec![],
             extra: toml::Table::new(),
         };
@@ -380,7 +373,6 @@ mod tests {
             kind: "noop".to_string(),
             path: "out.txt".to_string(),
             name: Some("alpha".to_string()),
-            format: None,
             exclude: vec![],
             extra: toml::Table::new(),
         };
@@ -409,7 +401,6 @@ mod tests {
             kind: "noop".to_string(),
             path: "out.txt".to_string(),
             name: None,
-            format: None,
             exclude: vec!["sqlite_%".to_string()],
             extra: extra.clone(),
         };
@@ -418,7 +409,6 @@ mod tests {
         let config = CodegenConfig {
             path: dir.path().join(&entry.path),
             exclude: entry.exclude.clone(),
-            format: entry.format.clone(),
             extra: entry.extra.clone(),
         };
 
