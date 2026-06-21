@@ -8,6 +8,23 @@ use tempfile::TempDir;
 
 use common::{stig_cmd, write_migration};
 
+/// Count snapshot `.db` files in `dir/<backups_dir>/snapshots`.
+fn count_custom_snapshots(dir: &TempDir, backups_dir: &str) -> usize {
+    let snaps_dir = dir.path().join(backups_dir).join("snapshots");
+    if !snaps_dir.exists() {
+        return 0;
+    }
+    std::fs::read_dir(&snaps_dir)
+        .unwrap()
+        .filter_map(|e| e.ok())
+        .filter(|e| {
+            let name = e.file_name();
+            let n = name.to_string_lossy();
+            n.ends_with(".db")
+        })
+        .count()
+}
+
 // --database-path overrides the default database location.
 #[test]
 fn global_database_path_overrides_default() {
@@ -232,6 +249,121 @@ fn init_database_path_global_flag_writes_config() {
 
     let db_path = dir.path().join("other.db");
     assert!(db_path.exists(), "expected init to bootstrap overridden DB");
+}
+
+// --no-snapshot disables automatic pre-migration snapshots.
+#[test]
+fn global_no_snapshot_disables_snapshot() {
+    let dir = TempDir::new().unwrap();
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_users",
+        "CREATE TABLE users (id INTEGER);",
+    );
+
+    stig_cmd(&dir)
+        .arg("migrate")
+        .arg("--no-snapshot")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "apply  20240101000000_create_users.sql",
+        ))
+        .stdout(predicate::str::contains(
+            "✓ 1 applied, 0 already up to date",
+        ));
+
+    let conn = Connection::open(dir.path().join("app.db")).unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+    assert!(
+        !dir.path()
+            .join("db/snapshots/pre-20240101000000_create_users.db")
+            .exists(),
+        "expected no snapshot when --no-snapshot is passed"
+    );
+}
+
+// --backups-dir overrides the configured backups directory.
+#[test]
+fn global_backups_dir_overrides_default() {
+    let dir = TempDir::new().unwrap();
+    stig_cmd(&dir).arg("init").assert().success();
+
+    // Prepare an alternate backups tree for the snapshot to land in.
+    let custom_backups = dir.path().join("custom/db");
+    std::fs::create_dir_all(custom_backups.join("snapshots")).unwrap();
+    std::fs::create_dir_all(custom_backups.join("resets")).unwrap();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_users",
+        "CREATE TABLE users (id INTEGER);",
+    );
+
+    stig_cmd(&dir)
+        .arg("migrate")
+        .arg("--backups-dir")
+        .arg("custom/db")
+        .assert()
+        .success();
+
+    let conn = Connection::open(dir.path().join("app.db")).unwrap();
+    let count: i64 = conn
+        .query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(count, 1);
+
+    assert!(
+        !dir.path()
+            .join("db/snapshots/pre-20240101000000_create_users.db")
+            .exists(),
+        "did not expect snapshot in default backups dir"
+    );
+    assert_eq!(
+        count_custom_snapshots(&dir, "custom/db"),
+        1,
+        "expected snapshot in custom backups dir"
+    );
+}
+
+// --schema-path overrides the configured schema manifest path.
+#[test]
+fn global_schema_path_overrides_default() {
+    let dir = TempDir::new().unwrap();
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_users",
+        "CREATE TABLE users (id INTEGER PRIMARY KEY);",
+    );
+
+    stig_cmd(&dir)
+        .arg("migrate")
+        .arg("--schema-path")
+        .arg("custom/my_schema.sql")
+        .assert()
+        .success();
+
+    let custom_path = dir.path().join("custom/my_schema.sql");
+    assert!(custom_path.exists(), "expected custom schema path");
+    let content = std::fs::read_to_string(&custom_path).unwrap();
+    assert!(content.contains("CREATE TABLE users"));
+
+    let default_path = dir.path().join("db/schema.sql");
+    let default_content = std::fs::read_to_string(&default_path).unwrap();
+    assert!(
+        !default_content.contains("CREATE TABLE"),
+        "expected default schema to remain header-only"
+    );
 }
 
 // `stig init --config <path>` creates the config file at the given path.
