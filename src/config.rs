@@ -153,7 +153,7 @@ pub struct GenerateTarget {
 /// Optional overrides supplied via CLI flags. Each field is `None` unless the
 /// corresponding flag was explicitly passed.
 #[derive(Debug, Default, Clone)]
-pub struct CliOverrides {
+pub struct ConfigOverrides {
     pub database_path: Option<String>,
     pub migrations_dir: Option<String>,
     pub backups_dir: Option<String>,
@@ -169,14 +169,14 @@ pub struct CliOverrides {
 /// (CLI flags > environment variables > `stig.toml` > defaults) from a single
 /// call site.
 #[derive(Debug, Default, Clone)]
-pub struct CliContext {
+pub struct RunContext {
     /// Explicit config file path from `--config`.
     pub config_path: Option<PathBuf>,
     /// Parsed CLI overrides.
-    pub overrides: CliOverrides,
+    pub overrides: ConfigOverrides,
 }
 
-impl CliContext {
+impl RunContext {
     /// Load configuration using the process environment and then apply any
     /// CLI overrides carried by this context.
     pub fn load_config(&self) -> Result<Runtime, CliError> {
@@ -296,7 +296,7 @@ impl Default for ConfigFile {
 /// [`Self::migrations_path`], etc.) live here so callers stop reaching for
 /// `project_root` and the raw string fields directly.
 ///
-/// Built by [`Runtime::load`] or by [`CliContext::load_config`] (which
+/// Built by [`Runtime::load`] or by [`RunContext::load_config`] (which
 /// additionally applies CLI overrides on top of file + env).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Runtime {
@@ -337,7 +337,7 @@ impl Runtime {
     /// 3. Built-in defaults
     ///
     /// CLI flag overrides are applied separately by callers via
-    /// [`Runtime::apply_cli_overrides`] (or through [`CliContext::load_config`]).
+    /// [`Runtime::apply_cli_overrides`] (or through [`RunContext::load_config`]).
     ///
     /// # Parameters
     ///
@@ -420,7 +420,7 @@ impl Runtime {
 
     /// Apply CLI flag overrides on top of the loaded config (step 1 in the
     /// precedence chain). Called by individual commands after [`Runtime::load`].
-    pub fn apply_cli_overrides(&mut self, overrides: &CliOverrides) {
+    pub fn apply_cli_overrides(&mut self, overrides: &ConfigOverrides) {
         if let Some(v) = &overrides.database_path {
             self.file.database_path = v.clone();
         }
@@ -865,7 +865,7 @@ mod tests {
         let mut cfg = Runtime::load(Some(f.path()), &env, None).unwrap();
         assert_eq!(cfg.file.database_path, "env.db"); // env beat file
 
-        let overrides = CliOverrides {
+        let overrides = ConfigOverrides {
             database_path: Some("cli.db".into()),
             ..Default::default()
         };
@@ -880,7 +880,7 @@ mod tests {
         let mut cfg = Runtime::load(Some(f.path()), &empty_env(), None).unwrap();
         let original_migrations_dir = cfg.file.migrations_dir.clone();
 
-        let overrides = CliOverrides {
+        let overrides = ConfigOverrides {
             database_path: Some("cli.db".into()),
             ..Default::default()
         };
@@ -896,7 +896,7 @@ mod tests {
         let mut cfg = Runtime::load(Some(f.path()), &empty_env(), None).unwrap();
         assert!(cfg.file.auto_snapshot);
 
-        let overrides = CliOverrides {
+        let overrides = ConfigOverrides {
             auto_snapshot: Some(false),
             ..Default::default()
         };
@@ -911,7 +911,7 @@ mod tests {
         let mut cfg = Runtime::load(Some(f.path()), &empty_env(), None).unwrap();
         assert_eq!(cfg.file.schema_path, "db/schema.sql");
 
-        let overrides = CliOverrides {
+        let overrides = ConfigOverrides {
             schema_path: Some("custom/schema.sql".into()),
             ..Default::default()
         };

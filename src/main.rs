@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use stig::cli::{BackupsCommand, SchemaCommand};
-use stig::config::{CliContext, CliOverrides};
+use stig::config::{ConfigOverrides, RunContext};
 use stig::errors::CliError;
 
 #[derive(Debug, Parser)]
@@ -40,9 +40,9 @@ struct Cli {
     command: Command,
 }
 
-/// Build a [`CliOverrides`] value from the parsed global flags.
-fn cli_overrides(cli: &Cli) -> CliOverrides {
-    CliOverrides {
+/// Build a [`ConfigOverrides`] value from the parsed global flags.
+fn config_overrides(cli: &Cli) -> ConfigOverrides {
+    ConfigOverrides {
         database_path: cli.database_path.clone(),
         migrations_dir: cli.migrations_dir.clone(),
         backups_dir: cli.backups_dir.clone(),
@@ -113,9 +113,9 @@ enum Command {
 
 fn main() {
     let cli = Cli::parse();
-    let ctx = CliContext {
+    let ctx = RunContext {
         config_path: cli.config.clone(),
-        overrides: cli_overrides(&cli),
+        overrides: config_overrides(&cli),
     };
 
     let result: Result<(), anyhow::Error> = (|| {

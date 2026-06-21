@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Context as _;
 
 use crate::config::env_source::ProcessEnv;
-use crate::config::{CliContext, ConfigFile, Runtime};
+use crate::config::{ConfigFile, RunContext, Runtime};
 use crate::db::Db;
 use crate::errors::CliError;
 use crate::schema;
@@ -24,7 +24,7 @@ use crate::schema;
 /// writes a default `stig.toml`, creates directory scaffolding, and
 /// bootstraps the database. CLI overrides are applied to the default config
 /// before writing, so their values persist in the generated project.
-pub fn run(ctx: &CliContext) -> anyhow::Result<()> {
+pub fn run(ctx: &RunContext) -> anyhow::Result<()> {
     let cwd = current_dir()?;
     guard_no_existing_config(ctx, &cwd)?;
 
@@ -45,7 +45,7 @@ pub fn run(ctx: &CliContext) -> anyhow::Result<()> {
 }
 
 /// Return an error (exit 2) if the target config file already exists.
-fn guard_no_existing_config(ctx: &CliContext, cwd: &Path) -> anyhow::Result<()> {
+fn guard_no_existing_config(ctx: &RunContext, cwd: &Path) -> anyhow::Result<()> {
     if let Some(ref target) = ctx.config_path {
         let path = cwd.join(target);
         if path.is_file() {
@@ -63,7 +63,7 @@ fn guard_no_existing_config(ctx: &CliContext, cwd: &Path) -> anyhow::Result<()> 
 ///   project root is its parent directory (resolved against CWD).
 /// - Otherwise the config file is `<cwd>/stig.toml` and the project root is
 ///   the current working directory.
-fn resolve_init_paths(ctx: &CliContext, cwd: &Path) -> anyhow::Result<(PathBuf, PathBuf)> {
+fn resolve_init_paths(ctx: &RunContext, cwd: &Path) -> anyhow::Result<(PathBuf, PathBuf)> {
     let (config_path, project_root) = match &ctx.config_path {
         Some(target) => {
             let path = cwd.join(target);

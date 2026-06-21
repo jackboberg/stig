@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Global CLI flags: `--config`, `--database-path`, `--migrations-dir`, `--backups-dir`, `--schema-path`, `--no-snapshot`, and `--no-checksum`. CLI flags now take precedence over environment variables and `stig.toml` values as documented. `--config` specifically overrides `STIG_CONFIG` (previously the env var won). When passed to `stig init`, the values of these flags are persisted into the generated `stig.toml`; for all other commands they apply only to that invocation.
 
+### Changed
+
+- Internal config API refactored: the public `Config` struct is replaced by a `Runtime` wrapper around a `pub(crate) ConfigFile` (the serde mirror of `stig.toml`) plus the resolved `project_root`. Path-resolution accessors (`db_path`, `migrations_path`, `backups_path`, `snapshots_path`, `resets_path`, `schema_file_path`, `is_memory_db`) now live on `Runtime`, so callers should use them instead of joining `project_root` with raw string fields. The supporting types `CliContext` and `CliOverrides` are renamed to `RunContext` and `ConfigOverrides`.
+
 <!-- next-url -->
 [Unreleased]: https://github.com/jackboberg/stig/compare/v0.2.0...HEAD
 [0.2.0]: https://github.com/jackboberg/stig/compare/v0.1.0...v0.2.0
