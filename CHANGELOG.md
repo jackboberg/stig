@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Global CLI flags: `--config`, `--database-path`, `--migrations-dir`, `--backups-dir`, `--schema-path`, `--no-snapshot`, and `--no-checksum`. CLI flags now take precedence over environment variables and `stig.toml` values as documented.
+- Global CLI flags: `--config`, `--database-path`, `--migrations-dir`, `--backups-dir`, `--schema-path`, `--no-snapshot`, and `--no-checksum`. CLI flags now take precedence over environment variables and `stig.toml` values as documented. `--config` specifically overrides `STIG_CONFIG` (previously the env var won). When passed to `stig init`, the values of these flags are persisted into the generated `stig.toml`; for all other commands they apply only to that invocation.
 
 <!-- next-url -->
 [Unreleased]: https://github.com/jackboberg/stig/compare/v0.2.0...HEAD

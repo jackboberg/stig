@@ -23,7 +23,7 @@ use crate::schema;
 /// Exits with code 2 if the target `stig.toml` already exists. Otherwise
 /// writes a default `stig.toml`, creates directory scaffolding, and
 /// bootstraps the database. CLI overrides are applied to the default config
-/// before writing.
+/// before writing, so their values persist in the generated project.
 pub fn run(ctx: &CliContext) -> anyhow::Result<()> {
     let cwd = current_dir()?;
     guard_no_existing_config(ctx, &cwd)?;
