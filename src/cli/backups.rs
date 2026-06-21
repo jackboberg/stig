@@ -4,7 +4,6 @@ use anyhow::Context;
 
 use crate::cli::BackupsCommand;
 use crate::config::Runtime;
-use crate::errors::CliError;
 use crate::snapshot;
 
 /// Run `stig backups <subcommand>`.
@@ -55,7 +54,10 @@ fn list(config: &Runtime) -> anyhow::Result<()> {
 }
 
 fn prune(yes: bool, config: &Runtime) -> anyhow::Result<()> {
-    confirm_or_abort(yes)?;
+    super::prompt::confirm_or_abort(
+        yes,
+        "this will delete old backups beyond keep limits. Continue?",
+    )?;
 
     let snapshots_dir = config.snapshots_path();
     let resets_dir = config.resets_path();
@@ -68,21 +70,6 @@ fn prune(yes: bool, config: &Runtime) -> anyhow::Result<()> {
     println!("✓ backups pruned");
 
     Ok(())
-}
-
-fn confirm_or_abort(yes: bool) -> anyhow::Result<()> {
-    if yes {
-        return Ok(());
-    }
-    match dialoguer::Confirm::new()
-        .with_prompt("this will delete old backups beyond keep limits. Continue?")
-        .default(false)
-        .interact()
-    {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(CliError::Declined.into()),
-        Err(_) => Err(CliError::Declined.into()),
-    }
 }
 
 fn format_size(bytes: u64) -> String {

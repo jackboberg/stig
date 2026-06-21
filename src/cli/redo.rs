@@ -33,7 +33,8 @@ pub fn run(version: Option<String>, yes: bool, config: &Runtime) -> anyhow::Resu
 
     let target = resolve_target(&plan, version)?;
     require_snapshot(&target, &plan, &snapshots_dir)?;
-    confirm_or_abort(&target, yes)?;
+    let prompt = format!("this will discard local data added since version {target}. Continue?");
+    super::prompt::confirm_or_abort(yes, &prompt)?;
 
     restore_and_clear(db, config, &target, &snapshots_dir)?;
     // Re-open the database and reapply pending migrations.
@@ -105,26 +106,6 @@ fn require_snapshot(target: &str, plan: &Plan, snapshots_dir: &Path) -> anyhow::
         }
     }
     Err(CliError::Prerequisite(msg).into())
-}
-
-/// Prompt for confirmation unless `--yes` was passed. Returns `Ok(())` to
-/// proceed, or `Err(CliError::Declined)` if the user declines or stdin is
-/// not interactive (e.g. piped).
-fn confirm_or_abort(target: &str, yes: bool) -> anyhow::Result<()> {
-    if yes {
-        return Ok(());
-    }
-    let prompt = format!("this will discard local data added since version {target}. Continue?");
-    match dialoguer::Confirm::new()
-        .with_prompt(&prompt)
-        .default(false)
-        .interact()
-    {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(CliError::Declined.into()),
-        // stdin is not a TTY (piped) — treat as decline.
-        Err(_) => Err(CliError::Declined.into()),
-    }
 }
 
 /// Checkpoint, close the connection, restore the snapshot, then delete stale
