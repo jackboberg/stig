@@ -5,9 +5,7 @@ use anyhow::Context;
 use crate::config::Runtime;
 use crate::db::{Db, ensure_schema_migrations};
 use crate::errors::CliError;
-use crate::migrate::apply;
-use crate::migrate::discover::discover;
-use crate::migrate::plan::Plan;
+use crate::migrate;
 use crate::schema;
 use crate::snapshot;
 
@@ -46,7 +44,7 @@ pub fn run(yes: bool, config: &Runtime) -> anyhow::Result<()> {
     let backup_path = snapshot::take_reset_backup(&db_path, &resets_dir)
         .context("failed to create reset backup")?;
 
-    if let Err(e) = reapply_pending(config, &migrations_dir) {
+    if let Err(e) = reapply_pending_with_fast_path(config, &migrations_dir) {
         eprintln!("reset failed; restoring database from resets/");
         if let Err(restore_err) = snapshot::restore_reset_backup_from_path(&backup_path, &db_path) {
             return Err(anyhow::anyhow!(
@@ -87,15 +85,16 @@ fn confirm_or_abort(yes: bool) -> anyhow::Result<()> {
 }
 
 /// Open a fresh database and reapply all migrations. Uses the schema manifest
-/// if available and up to date for a fast reset; otherwise replays all
-/// migrations individually.
-fn reapply_pending(config: &Runtime, migrations_dir: &Path) -> anyhow::Result<()> {
+/// if available and up to date for a fast reset; otherwise delegates to the
+/// shared `migrate::reapply_pending` which replays migrations individually.
+fn reapply_pending_with_fast_path(config: &Runtime, migrations_dir: &Path) -> anyhow::Result<()> {
     let db = Db::open(config)
         .with_context(|| format!("failed to open database at {}", config.file.database_path))?;
 
     ensure_schema_migrations(db.connection())?;
 
-    let files = discover(migrations_dir).context("failed to discover migration files")?;
+    let files = migrate::discover::discover(migrations_dir)
+        .context("failed to discover migration files")?;
 
     if schema::schema_has_content(config) && schema::schema_is_fresh(config, &files) {
         let n = schema::apply_schema_manifest(&db, config)
@@ -105,8 +104,7 @@ fn reapply_pending(config: &Runtime, migrations_dir: &Path) -> anyhow::Result<()
             config.file.schema_path
         );
     } else {
-        let plan = Plan::build(&files, db.connection())?;
-        apply::apply_pending(&db, &plan, config, false)?;
+        migrate::reapply_pending(&db, config, migrations_dir)?;
     }
 
     Ok(())
