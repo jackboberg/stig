@@ -15,7 +15,6 @@ fn ts_target(path: &str) -> GenerateTarget {
         kind: "typescript".to_string(),
         path: path.to_string(),
         name: None,
-        format: None,
         exclude: vec![],
         extra: toml::Table::new(),
     }

@@ -123,11 +123,6 @@ pub struct GenerateTarget {
     #[serde(default)]
     pub name: Option<String>,
 
-    /// Optional post-generation format command. `{path}` is substituted with
-    /// the output path.
-    #[serde(default)]
-    pub format: Option<String>,
-
     /// Table-name glob patterns to exclude from codegen output.
     ///
     /// When dispatching through [`crate::codegen::run_targets`], internal
@@ -721,7 +716,6 @@ mod tests {
             [[generate]]
             kind    = "typescript"
             path    = "types.ts"
-            format  = "deno fmt {path}"
             exclude = ["sqlite_%"]
         "#});
 
@@ -1134,7 +1128,6 @@ mod tests {
                     kind: "typescript".to_string(),
                     path: "types.ts".to_string(),
                     name: Some("my-types".to_string()),
-                    format: None,
                     exclude: vec!["sqlite_%".to_string()],
                     extra,
                 }],
