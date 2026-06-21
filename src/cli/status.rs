@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 
-use crate::config::CliContext;
+use crate::config::Config;
 use crate::db::{Db, ensure_schema_migrations, format_drift_messages};
 use crate::errors::CliError;
 use crate::migrate::discover::discover;
@@ -8,8 +8,7 @@ use crate::migrate::plan::{MigrationStatus, Plan};
 use crate::snapshot;
 
 /// Run `stig status`.
-pub fn run(ctx: &CliContext) -> Result<()> {
-    let config = ctx.load_config()?;
+pub fn run(config: &Config) -> Result<()> {
     let project_root = &config.project_root;
 
     let migrations_dir = project_root.join(&config.migrations_dir);
@@ -21,7 +20,7 @@ pub fn run(ctx: &CliContext) -> Result<()> {
         .into());
     }
 
-    let db = Db::open(&config)
+    let db = Db::open(config)
         .with_context(|| format!("failed to open database at {}", config.database_path))?;
 
     ensure_schema_migrations(db.connection())?;

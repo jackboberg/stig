@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::Context;
 
-use crate::config::{CliContext, Config};
+use crate::config::Config;
 use crate::db::{Db, delete_from_version, ensure_schema_migrations};
 use crate::errors::CliError;
 use crate::migrate::apply;
@@ -11,9 +11,7 @@ use crate::migrate::plan::{MigrationStatus, Plan};
 use crate::snapshot;
 
 /// Run `stig redo [<version>] [--yes]`.
-pub fn run(version: Option<String>, yes: bool, ctx: &CliContext) -> anyhow::Result<()> {
-    let config = ctx.load_config()?;
-
+pub fn run(version: Option<String>, yes: bool, config: &Config) -> anyhow::Result<()> {
     let migrations_dir = config.project_root.join(&config.migrations_dir);
     if !migrations_dir.is_dir() {
         return Err(CliError::Prerequisite(format!(
@@ -28,7 +26,7 @@ pub fn run(version: Option<String>, yes: bool, ctx: &CliContext) -> anyhow::Resu
         .join(&config.backups_dir)
         .join("snapshots");
 
-    let db = Db::open(&config)
+    let db = Db::open(config)
         .with_context(|| format!("failed to open database at {}", config.database_path))?;
 
     ensure_schema_migrations(db.connection())?;
@@ -40,8 +38,8 @@ pub fn run(version: Option<String>, yes: bool, ctx: &CliContext) -> anyhow::Resu
     require_snapshot(&target, &plan, &snapshots_dir)?;
     confirm_or_abort(&target, yes)?;
 
-    restore_and_clear(db, &config, &target, &snapshots_dir)?;
-    reapply_pending(&config, &migrations_dir)?;
+    restore_and_clear(db, config, &target, &snapshots_dir)?;
+    reapply_pending(config, &migrations_dir)?;
 
     println!("✓ redo complete");
 

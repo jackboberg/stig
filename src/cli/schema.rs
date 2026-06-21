@@ -1,17 +1,15 @@
 use anyhow::Context;
 
 use crate::cli::SchemaCommand;
-use crate::config::CliContext;
+use crate::config::Config;
 use crate::db::{Db, ensure_schema_migrations};
 use crate::errors::CliError;
 use crate::migrate::discover::discover;
 use crate::schema::diff;
 
 /// Run `stig schema diff`.
-pub fn run(command: SchemaCommand, ctx: &CliContext) -> anyhow::Result<()> {
+pub fn run(command: SchemaCommand, config: &Config) -> anyhow::Result<()> {
     let SchemaCommand::Diff { output } = command;
-
-    let config = ctx.load_config()?;
     let project_root = &config.project_root;
 
     let migrations_dir = project_root.join(&config.migrations_dir);
@@ -23,7 +21,7 @@ pub fn run(command: SchemaCommand, ctx: &CliContext) -> anyhow::Result<()> {
         .into());
     }
 
-    let db = Db::open(&config)
+    let db = Db::open(config)
         .with_context(|| format!("failed to open database at {}", config.database_path))?;
 
     ensure_schema_migrations(db.connection())?;

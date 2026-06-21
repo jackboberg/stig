@@ -2,7 +2,7 @@ use std::path::Path;
 
 use anyhow::Context;
 
-use crate::config::{CliContext, Config};
+use crate::config::Config;
 use crate::db::{Db, ensure_schema_migrations};
 use crate::errors::CliError;
 use crate::migrate::apply;
@@ -12,9 +12,7 @@ use crate::schema;
 use crate::snapshot;
 
 /// Run `stig reset [--yes]`.
-pub fn run(yes: bool, ctx: &CliContext) -> anyhow::Result<()> {
-    let config = ctx.load_config()?;
-
+pub fn run(yes: bool, config: &Config) -> anyhow::Result<()> {
     let migrations_dir = config.project_root.join(&config.migrations_dir);
     if !migrations_dir.is_dir() {
         return Err(CliError::Prerequisite(format!(
@@ -34,7 +32,7 @@ pub fn run(yes: bool, ctx: &CliContext) -> anyhow::Result<()> {
         )
     })?;
 
-    let db = Db::open(&config)
+    let db = Db::open(config)
         .with_context(|| format!("failed to open database at {}", config.database_path))?;
 
     ensure_schema_migrations(db.connection())?;
@@ -48,7 +46,7 @@ pub fn run(yes: bool, ctx: &CliContext) -> anyhow::Result<()> {
     let backup_path = snapshot::take_reset_backup(&db_path, &resets_dir)
         .context("failed to create reset backup")?;
 
-    if let Err(e) = reapply_pending(&config, &migrations_dir) {
+    if let Err(e) = reapply_pending(config, &migrations_dir) {
         eprintln!("reset failed; restoring database from resets/");
         if let Err(restore_err) = snapshot::restore_reset_backup_from_path(&backup_path, &db_path) {
             return Err(anyhow::anyhow!(

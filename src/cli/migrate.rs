@@ -1,6 +1,6 @@
 use anyhow::Context;
 
-use crate::config::CliContext;
+use crate::config::Config;
 use crate::db::{Db, ensure_schema_migrations, format_drift_messages};
 use crate::errors::CliError;
 use crate::migrate::apply;
@@ -9,8 +9,7 @@ use crate::migrate::plan::Plan;
 use crate::schema;
 
 /// Run `stig migrate`.
-pub fn run(dry_run: bool, ctx: &CliContext) -> anyhow::Result<()> {
-    let config = ctx.load_config()?;
+pub fn run(dry_run: bool, config: &Config) -> anyhow::Result<()> {
     let project_root = &config.project_root;
 
     let migrations_dir = project_root.join(&config.migrations_dir);
@@ -22,7 +21,7 @@ pub fn run(dry_run: bool, ctx: &CliContext) -> anyhow::Result<()> {
         .into());
     }
 
-    let db = Db::open(&config)
+    let db = Db::open(config)
         .with_context(|| format!("failed to open database at {}", config.database_path))?;
 
     ensure_schema_migrations(db.connection())?;
@@ -46,17 +45,17 @@ pub fn run(dry_run: bool, ctx: &CliContext) -> anyhow::Result<()> {
 
     if !dry_run
         && n_pending == n_current
-        && schema::schema_has_content(&config)
-        && schema::schema_is_fresh(&config, &files)
+        && schema::schema_has_content(config)
+        && schema::schema_is_fresh(config, &files)
     {
-        let n_applied = schema::apply_schema_manifest(&db, &config)
+        let n_applied = schema::apply_schema_manifest(&db, config)
             .context("failed to apply schema manifest")?;
         println!(
             "✓ applied {} ({n_applied} migrations marked as applied)",
             config.schema_path
         );
     } else {
-        apply::apply_pending(&db, &plan, &config, dry_run)?;
+        apply::apply_pending(&db, &plan, config, dry_run)?;
 
         if dry_run {
             println!("✓ {n_pending} would be applied, {n_already} already up to date");
@@ -68,7 +67,7 @@ pub fn run(dry_run: bool, ctx: &CliContext) -> anyhow::Result<()> {
                 if plan_after.pending().is_empty() {
                     let sql = schema::generate_schema_sql(db.connection(), &files)
                         .context("failed to generate schema manifest")?;
-                    schema::write_schema_sql(&config, &sql)
+                    schema::write_schema_sql(config, &sql)
                         .context("failed to write schema manifest")?;
                 }
             }
