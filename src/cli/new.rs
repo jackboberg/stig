@@ -20,7 +20,7 @@ use crate::errors::CliError;
 
 /// Run `stig new <description> [--no-edit]`.
 pub fn run(description: String, no_edit: bool, config: &Config) -> anyhow::Result<()> {
-    let migrations_dir = config.project_root.join(&config.migrations_dir);
+    let migrations_dir = config.migrations_path();
 
     if !migrations_dir.is_dir() {
         return Err(CliError::Usage(

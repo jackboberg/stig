@@ -13,7 +13,7 @@ use crate::snapshot;
 
 /// Run `stig reset [--yes]`.
 pub fn run(yes: bool, config: &Config) -> anyhow::Result<()> {
-    let migrations_dir = config.project_root.join(&config.migrations_dir);
+    let migrations_dir = config.migrations_path();
     if !migrations_dir.is_dir() {
         return Err(CliError::Prerequisite(format!(
             "migrations directory not found: {}",
@@ -24,7 +24,7 @@ pub fn run(yes: bool, config: &Config) -> anyhow::Result<()> {
 
     confirm_or_abort(yes)?;
 
-    let resets_dir = config.project_root.join(&config.backups_dir).join("resets");
+    let resets_dir = config.resets_path();
     std::fs::create_dir_all(&resets_dir).with_context(|| {
         format!(
             "failed to create resets directory: {}",
@@ -40,7 +40,7 @@ pub fn run(yes: bool, config: &Config) -> anyhow::Result<()> {
     db.checkpoint()?;
     db.close()?;
 
-    let db_path = config.resolve_path(&config.database_path);
+    let db_path = config.db_path();
 
     println!("moving database to resets/");
     let backup_path = snapshot::take_reset_backup(&db_path, &resets_dir)

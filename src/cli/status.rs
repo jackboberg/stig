@@ -9,9 +9,7 @@ use crate::snapshot;
 
 /// Run `stig status`.
 pub fn run(config: &Config) -> Result<()> {
-    let project_root = &config.project_root;
-
-    let migrations_dir = project_root.join(&config.migrations_dir);
+    let migrations_dir = config.migrations_path();
     if !migrations_dir.is_dir() {
         return Err(CliError::Prerequisite(format!(
             "migrations directory not found: {}",
@@ -28,7 +26,7 @@ pub fn run(config: &Config) -> Result<()> {
     let files = discover(&migrations_dir).context("failed to discover migration files")?;
     let plan = Plan::build(&files, db.connection())?;
 
-    let snapshots_dir = project_root.join(&config.backups_dir).join("snapshots");
+    let snapshots_dir = config.snapshots_path();
 
     // Header
     println!("database: {}", config.database_path);

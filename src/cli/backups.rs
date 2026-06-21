@@ -16,9 +16,8 @@ pub fn run(command: BackupsCommand, config: &Config) -> anyhow::Result<()> {
 }
 
 fn list(config: &Config) -> anyhow::Result<()> {
-    let backups_dir = config.project_root.join(&config.backups_dir);
-    let snapshots_dir = backups_dir.join("snapshots");
-    let resets_dir = backups_dir.join("resets");
+    let snapshots_dir = config.snapshots_path();
+    let resets_dir = config.resets_path();
 
     let snapshots = snapshot::list_backups(&snapshots_dir, "pre-")?;
     let resets = snapshot::list_backups(&resets_dir, "reset-")?;
@@ -54,9 +53,8 @@ fn list(config: &Config) -> anyhow::Result<()> {
 fn prune(yes: bool, config: &Config) -> anyhow::Result<()> {
     confirm_or_abort(yes)?;
 
-    let backups_dir = config.project_root.join(&config.backups_dir);
-    let snapshots_dir = backups_dir.join("snapshots");
-    let resets_dir = backups_dir.join("resets");
+    let snapshots_dir = config.snapshots_path();
+    let resets_dir = config.resets_path();
 
     snapshot::prune_snapshots(&snapshots_dir, config.snapshot_keep)
         .context("failed to prune snapshots")?;

@@ -417,6 +417,53 @@ impl Config {
     }
 
     // -----------------------------------------------------------------------
+    // Path accessors
+    //
+    // Centralised so callers stop building paths from `project_root` + the
+    // raw string fields. Each accessor delegates to [`Self::resolve_path`],
+    // which preserves the `:memory:` token and absolute paths.
+    // -----------------------------------------------------------------------
+
+    /// Resolved path to the SQLite database.
+    ///
+    /// For the literal `":memory:"` this returns `PathBuf::from(":memory:")`
+    /// rather than a filesystem path. Callers that need to branch on the
+    /// in-memory case should use [`Self::is_memory_db`].
+    pub fn db_path(&self) -> PathBuf {
+        self.resolve_path(&self.database_path)
+    }
+
+    /// Whether [`Self::database_path`] is the literal `":memory:"` token.
+    pub fn is_memory_db(&self) -> bool {
+        self.database_path == ":memory:"
+    }
+
+    /// Resolved path to the migrations directory.
+    pub fn migrations_path(&self) -> PathBuf {
+        self.resolve_path(&self.migrations_dir)
+    }
+
+    /// Resolved path to the backups directory.
+    pub fn backups_path(&self) -> PathBuf {
+        self.resolve_path(&self.backups_dir)
+    }
+
+    /// Resolved path to the snapshots directory (`<backups>/snapshots`).
+    pub fn snapshots_path(&self) -> PathBuf {
+        self.backups_path().join("snapshots")
+    }
+
+    /// Resolved path to the reset-backups directory (`<backups>/resets`).
+    pub fn resets_path(&self) -> PathBuf {
+        self.backups_path().join("resets")
+    }
+
+    /// Resolved path to the schema manifest file.
+    pub fn schema_file_path(&self) -> PathBuf {
+        self.resolve_path(&self.schema_path)
+    }
+
+    // -----------------------------------------------------------------------
     // Private helpers
     // -----------------------------------------------------------------------
 
@@ -1063,5 +1110,66 @@ mod tests {
             loaded.generate[0].extra.get("header"),
             Some(&toml::Value::String("// auto-generated".to_string()))
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Path accessors
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn path_accessors_resolve_relative_paths_against_project_root() {
+        let dir = TempDir::new().unwrap();
+        let cfg = Config {
+            project_root: dir.path().to_path_buf(),
+            ..Config::default()
+        };
+
+        assert_eq!(cfg.db_path(), dir.path().join("app.db"));
+        assert_eq!(cfg.migrations_path(), dir.path().join("db/migrations"));
+        assert_eq!(cfg.backups_path(), dir.path().join("db"));
+        assert_eq!(
+            cfg.snapshots_path(),
+            dir.path().join("db").join("snapshots")
+        );
+        assert_eq!(cfg.resets_path(), dir.path().join("db").join("resets"));
+        assert_eq!(cfg.schema_file_path(), dir.path().join("db/schema.sql"));
+        assert!(!cfg.is_memory_db());
+    }
+
+    #[test]
+    fn db_path_preserves_memory_token_and_is_memory_db_detects_it() {
+        let dir = TempDir::new().unwrap();
+        let cfg = Config {
+            project_root: dir.path().to_path_buf(),
+            database_path: ":memory:".to_string(),
+            ..Config::default()
+        };
+
+        assert_eq!(cfg.db_path(), PathBuf::from(":memory:"));
+        assert!(cfg.is_memory_db());
+    }
+
+    #[test]
+    fn path_accessors_preserve_absolute_paths() {
+        let dir = TempDir::new().unwrap();
+        let cfg = Config {
+            project_root: dir.path().to_path_buf(),
+            database_path: "/var/lib/app/data.db".to_string(),
+            migrations_dir: "/etc/app/migrations".to_string(),
+            backups_dir: "/srv/backups".to_string(),
+            schema_path: "/etc/app/schema.sql".to_string(),
+            ..Config::default()
+        };
+
+        assert_eq!(cfg.db_path(), PathBuf::from("/var/lib/app/data.db"));
+        assert_eq!(cfg.migrations_path(), PathBuf::from("/etc/app/migrations"));
+        assert_eq!(cfg.backups_path(), PathBuf::from("/srv/backups"));
+        assert_eq!(
+            cfg.snapshots_path(),
+            PathBuf::from("/srv/backups/snapshots")
+        );
+        assert_eq!(cfg.resets_path(), PathBuf::from("/srv/backups/resets"));
+        assert_eq!(cfg.schema_file_path(), PathBuf::from("/etc/app/schema.sql"));
+        assert!(!cfg.is_memory_db());
     }
 }

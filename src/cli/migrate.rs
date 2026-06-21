@@ -10,9 +10,7 @@ use crate::schema;
 
 /// Run `stig migrate`.
 pub fn run(dry_run: bool, config: &Config) -> anyhow::Result<()> {
-    let project_root = &config.project_root;
-
-    let migrations_dir = project_root.join(&config.migrations_dir);
+    let migrations_dir = config.migrations_path();
     if !migrations_dir.is_dir() {
         return Err(CliError::Prerequisite(format!(
             "migrations directory not found: {}",
@@ -33,7 +31,7 @@ pub fn run(dry_run: bool, config: &Config) -> anyhow::Result<()> {
     if config.checksum_check {
         let drifted = plan.drifted();
         if !drifted.is_empty() {
-            let snapshots_dir = project_root.join(&config.backups_dir).join("snapshots");
+            let snapshots_dir = config.snapshots_path();
             let msg = format_drift_messages(&drifted, &snapshots_dir);
             return Err(CliError::Drift(msg).into());
         }

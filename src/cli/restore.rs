@@ -13,12 +13,12 @@ use crate::snapshot;
 /// recent reset backup is used. With a timestamp, the matching
 /// `reset-<timestamp>.db` file is used.
 pub fn run(timestamp: Option<String>, yes: bool, config: &Config) -> anyhow::Result<()> {
-    if config.database_path == ":memory:" {
+    if config.is_memory_db() {
         return Err(CliError::Usage("cannot restore an in-memory database".to_string()).into());
     }
 
-    let db_path = config.resolve_path(&config.database_path);
-    let resets_dir = config.project_root.join(&config.backups_dir).join("resets");
+    let db_path = config.db_path();
+    let resets_dir = config.resets_path();
 
     let backup_path = resolve_backup(&resets_dir, timestamp.as_deref())?;
 

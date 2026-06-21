@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Context, Result};
 use rusqlite::params;
@@ -14,10 +14,6 @@ use crate::sha256_hex;
 use crate::snapshot;
 
 use super::plan::{Plan, PlannedMigration};
-
-fn resolve_db_path(config: &Config) -> PathBuf {
-    config.resolve_path(&config.database_path)
-}
 
 /// Check whether the migration file contains a `stig: non-transactional`
 /// directive.
@@ -337,9 +333,8 @@ fn apply_single_migration(
 /// When `dry_run` is true, files are read and parsed but no SQL is executed
 /// and no snapshots are written.
 pub fn apply_pending(db: &Db, plan: &Plan, config: &Config, dry_run: bool) -> Result<()> {
-    let project_root = &config.project_root;
-    let snapshots_dir = project_root.join(&config.backups_dir).join("snapshots");
-    let db_path = resolve_db_path(config);
+    let snapshots_dir = config.snapshots_path();
+    let db_path = config.db_path();
     let can_snapshot = config.auto_snapshot && !db.is_memory();
     let mut n_applied = 0u32;
 

@@ -10,9 +10,8 @@ use crate::schema::diff;
 /// Run `stig schema diff`.
 pub fn run(command: SchemaCommand, config: &Config) -> anyhow::Result<()> {
     let SchemaCommand::Diff { output } = command;
-    let project_root = &config.project_root;
 
-    let migrations_dir = project_root.join(&config.migrations_dir);
+    let migrations_dir = config.migrations_path();
     if !migrations_dir.is_dir() {
         return Err(CliError::Prerequisite(format!(
             "migrations directory not found: {}",
@@ -42,7 +41,7 @@ pub fn run(command: SchemaCommand, config: &Config) -> anyhow::Result<()> {
                 }
                 std::fs::write(&path, &sql)
                     .with_context(|| format!("failed to write migration to {}", path.display()))?;
-                let display_path = path.strip_prefix(project_root).unwrap_or(&path);
+                let display_path = path.strip_prefix(&config.project_root).unwrap_or(&path);
                 println!("\u{2713} {}", display_path.display());
             } else {
                 print!("{sql}");

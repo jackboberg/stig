@@ -51,10 +51,8 @@ impl Db {
     ///   warning that snapshot/reset operations are not supported in this mode.  `foreign_keys` is
     ///   still applied.
     pub fn open(config: &Config) -> Result<Self> {
-        let raw = &config.database_path;
-        let is_memory = raw == ":memory:";
-
-        let resolved = config.resolve_path(raw);
+        let is_memory = config.is_memory_db();
+        let resolved = config.db_path();
 
         let conn = if is_memory {
             warn!(

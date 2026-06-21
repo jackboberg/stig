@@ -12,7 +12,7 @@ use crate::snapshot;
 
 /// Run `stig redo [<version>] [--yes]`.
 pub fn run(version: Option<String>, yes: bool, config: &Config) -> anyhow::Result<()> {
-    let migrations_dir = config.project_root.join(&config.migrations_dir);
+    let migrations_dir = config.migrations_path();
     if !migrations_dir.is_dir() {
         return Err(CliError::Prerequisite(format!(
             "migrations directory not found: {}",
@@ -21,10 +21,7 @@ pub fn run(version: Option<String>, yes: bool, config: &Config) -> anyhow::Resul
         .into());
     }
 
-    let snapshots_dir = config
-        .project_root
-        .join(&config.backups_dir)
-        .join("snapshots");
+    let snapshots_dir = config.snapshots_path();
 
     let db = Db::open(config)
         .with_context(|| format!("failed to open database at {}", config.database_path))?;
@@ -132,7 +129,7 @@ fn restore_and_clear(
     db.checkpoint()?;
     db.close()?;
 
-    let db_path = config.resolve_path(&config.database_path);
+    let db_path = config.db_path();
 
     println!("restoring pre-{target}.db");
     snapshot::restore_snapshot(target, &db_path, snapshots_dir)

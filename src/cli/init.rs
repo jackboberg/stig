@@ -36,8 +36,8 @@ pub fn run(ctx: &CliContext) -> anyhow::Result<()> {
     config.apply_cli_overrides(&ctx.overrides);
 
     write_config(&config, &config_path, &project_root)?;
-    create_migrations_dir(&config, &project_root)?;
-    create_backups_dir(&config, &project_root)?;
+    create_migrations_dir(&config)?;
+    create_backups_dir(&config)?;
     create_schema_manifest(&config)?;
     bootstrap_database(&config)?;
 
@@ -105,8 +105,8 @@ fn write_config(config: &Config, config_path: &Path, project_root: &Path) -> any
 }
 
 /// Create the migrations directory.
-fn create_migrations_dir(config: &Config, project_root: &Path) -> anyhow::Result<()> {
-    let dir = project_root.join(&config.migrations_dir);
+fn create_migrations_dir(config: &Config) -> anyhow::Result<()> {
+    let dir = config.migrations_path();
     std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
     println!("✓ created {}/", config.migrations_dir);
     Ok(())
@@ -114,8 +114,8 @@ fn create_migrations_dir(config: &Config, project_root: &Path) -> anyhow::Result
 
 /// Create the backups directory tree (`snapshots/`, `resets/`) and write a
 /// `.gitignore` inside each subdirectory to exclude its contents.
-fn create_backups_dir(config: &Config, project_root: &Path) -> anyhow::Result<()> {
-    let base = project_root.join(&config.backups_dir);
+fn create_backups_dir(config: &Config) -> anyhow::Result<()> {
+    let base = config.backups_path();
     for sub in ["snapshots", "resets"] {
         let dir = base.join(sub);
         std::fs::create_dir_all(&dir)
@@ -139,7 +139,7 @@ fn create_backups_dir(config: &Config, project_root: &Path) -> anyhow::Result<()
 /// target path (e.g. a directory), since later operations would fail with a
 /// less clear error.
 fn create_schema_manifest(config: &Config) -> anyhow::Result<()> {
-    let path = schema::schema_path(config);
+    let path = config.schema_file_path();
     if path.is_file() {
         return Ok(());
     }
