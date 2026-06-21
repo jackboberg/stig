@@ -22,7 +22,15 @@ pub fn run(timestamp: Option<String>, yes: bool, config: &Runtime) -> anyhow::Re
 
     let backup_path = resolve_backup(&resets_dir, timestamp.as_deref())?;
 
-    confirm_or_abort(yes, &backup_path)?;
+    let name = backup_path
+        .file_name()
+        .map(|n| n.to_string_lossy())
+        .unwrap_or_else(|| backup_path.display().to_string().into());
+    let prompt = format!(
+        "this will replace the current database with {}. Continue?",
+        name
+    );
+    super::prompt::confirm_or_abort(yes, &prompt)?;
 
     snapshot::restore_reset_backup_from_path(&backup_path, &db_path)
         .with_context(|| format!("failed to restore {}", backup_path.display()))?;
@@ -66,28 +74,4 @@ fn validate_timestamp(ts: &str) -> anyhow::Result<()> {
         return Err(CliError::Usage(format!("invalid timestamp format: {ts}")).into());
     }
     Ok(())
-}
-
-/// Prompt for confirmation unless `--yes` was passed.
-fn confirm_or_abort(yes: bool, backup_path: &Path) -> anyhow::Result<()> {
-    if yes {
-        return Ok(());
-    }
-    let name = backup_path
-        .file_name()
-        .map(|n| n.to_string_lossy())
-        .unwrap_or_else(|| backup_path.display().to_string().into());
-    match dialoguer::Confirm::new()
-        .with_prompt(format!(
-            "this will replace the current database with {}. Continue?",
-            name
-        ))
-        .default(false)
-        .interact()
-    {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(CliError::Declined.into()),
-        // stdin is not a TTY (piped) — treat as decline.
-        Err(_) => Err(CliError::Declined.into()),
-    }
 }

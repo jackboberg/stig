@@ -20,7 +20,10 @@ pub fn run(yes: bool, config: &Runtime) -> anyhow::Result<()> {
         .into());
     }
 
-    confirm_or_abort(yes)?;
+    super::prompt::confirm_or_abort(
+        yes,
+        "this will destroy the current database and re-migrate from empty. Continue?",
+    )?;
 
     let resets_dir = config.resets_path();
     std::fs::create_dir_all(&resets_dir).with_context(|| {
@@ -63,25 +66,6 @@ pub fn run(yes: bool, config: &Runtime) -> anyhow::Result<()> {
         .context("failed to prune reset backups")?;
 
     Ok(())
-}
-
-/// Prompt for confirmation unless `--yes` was passed. Returns `Ok(())` to
-/// proceed, or `Err(CliError::Declined)` if the user declines or stdin is
-/// not interactive (e.g. piped).
-fn confirm_or_abort(yes: bool) -> anyhow::Result<()> {
-    if yes {
-        return Ok(());
-    }
-    match dialoguer::Confirm::new()
-        .with_prompt("this will destroy the current database and re-migrate from empty. Continue?")
-        .default(false)
-        .interact()
-    {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(CliError::Declined.into()),
-        // stdin is not a TTY (piped) — treat as decline.
-        Err(_) => Err(CliError::Declined.into()),
-    }
 }
 
 /// Open a fresh database and reapply all migrations. Uses the schema manifest
