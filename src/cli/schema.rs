@@ -3,7 +3,6 @@ use anyhow::Context;
 use crate::cli::SchemaCommand;
 use crate::config::Runtime;
 use crate::db::Db;
-use crate::errors::CliError;
 use crate::migrate::discover::discover;
 use crate::schema::diff;
 
@@ -11,14 +10,7 @@ use crate::schema::diff;
 pub fn run(command: SchemaCommand, config: &Runtime) -> anyhow::Result<()> {
     let SchemaCommand::Diff { output } = command;
 
-    let migrations_dir = config.migrations_path();
-    if !migrations_dir.is_dir() {
-        return Err(CliError::Prerequisite(format!(
-            "migrations directory not found: {}",
-            migrations_dir.display()
-        ))
-        .into());
-    }
+    let migrations_dir = super::guards::require_migrations_dir(config)?;
 
     let db = Db::open(config)
         .with_context(|| format!("failed to open database at {}", config.file.database_path))?;

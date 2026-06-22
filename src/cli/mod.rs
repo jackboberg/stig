@@ -1,5 +1,6 @@
 pub mod backups;
 pub mod generate;
+pub mod guards;
 pub mod init;
 pub mod migrate;
 pub mod new;

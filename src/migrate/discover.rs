@@ -45,18 +45,17 @@ impl MigrationFile {
 /// Returns an error if `migrations_dir` does not exist or if two files share
 /// the same timestamp.
 pub fn discover(migrations_dir: &Path) -> Result<Vec<MigrationFile>> {
-    if !migrations_dir.exists() {
-        bail!(
-            "migrations directory not found: {}",
-            migrations_dir.display()
-        );
-    }
-
     let mut by_timestamp: HashMap<String, PathBuf> = HashMap::new();
     let mut migrations: Vec<MigrationFile> = Vec::new();
 
     let mut entries: Vec<_> = migrations_dir
-        .read_dir()?
+        .read_dir()
+        .with_context(|| {
+            format!(
+                "failed to read migrations directory: {}",
+                migrations_dir.display()
+            )
+        })?
         .collect::<Result<Vec<_>, _>>()
         .with_context(|| {
             format!(
@@ -272,7 +271,11 @@ mod tests {
         // Use a child path that was never created — guaranteed absent for the
         // lifetime of the TempDir.
         let missing = tmp.path().join("nonexistent_subdir");
-        assert!(discover(&missing).is_err());
+        let err = discover(&missing).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("failed to read migrations directory")
+        );
     }
 
     #[test]

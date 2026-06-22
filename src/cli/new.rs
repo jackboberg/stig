@@ -20,14 +20,7 @@ use crate::errors::CliError;
 
 /// Run `stig new <description> [--no-edit]`.
 pub fn run(description: String, no_edit: bool, config: &Runtime) -> anyhow::Result<()> {
-    let migrations_dir = config.migrations_path();
-
-    if !migrations_dir.is_dir() {
-        return Err(CliError::Usage(
-            "migrations directory not found — run `stig init` first".into(),
-        )
-        .into());
-    }
+    let migrations_dir = super::guards::require_migrations_dir(config)?;
 
     let slug = slugify(&description)?;
     let now = Utc::now();

@@ -4,21 +4,13 @@ use anyhow::Context;
 
 use crate::config::Runtime;
 use crate::db::Db;
-use crate::errors::CliError;
 use crate::migrate;
 use crate::schema;
 use crate::snapshot;
 
 /// Run `stig reset [--yes]`.
 pub fn run(yes: bool, config: &Runtime) -> anyhow::Result<()> {
-    let migrations_dir = config.migrations_path();
-    if !migrations_dir.is_dir() {
-        return Err(CliError::Prerequisite(format!(
-            "migrations directory not found: {}",
-            migrations_dir.display()
-        ))
-        .into());
-    }
+    let migrations_dir = super::guards::require_migrations_dir(config)?;
 
     super::prompt::confirm_or_abort(
         yes,

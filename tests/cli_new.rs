@@ -143,9 +143,9 @@ fn new_no_editor_env_succeeds_silently() {
         .success();
 }
 
-// No migrations dir (no init) exits 2
+// No migrations dir (no init) exits 4
 #[test]
-fn new_without_init_exits_2() {
+fn new_without_init_exits_4() {
     let dir = TempDir::new().unwrap();
     // Write a minimal stig.toml so config loads, but skip creating the dir.
     std::fs::write(dir.path().join("stig.toml"), "").unwrap();
@@ -154,6 +154,6 @@ fn new_without_init_exits_2() {
         .args(["new", "my_migration", "--no-edit"])
         .assert()
         .failure()
-        .code(2)
+        .code(4)
         .stderr(predicate::str::contains("migrations directory not found"));
 }
