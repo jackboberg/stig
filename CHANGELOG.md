@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Extracted shared `reapply_pending` into `src/migrate/mod.rs`, eliminating duplication between `redo` and `reset`. The schema-manifest fast path remains exclusive to `reset` (documented inline).
 - Eliminated remaining bare `"snapshots"` / `"resets"` string literals from production code (`init.rs`) and unit tests (`snapshot.rs`). All call sites now use `Runtime::snapshots_path()` and `Runtime::resets_path()` helpers.
 - `Db::open` now ensures the `schema_migrations` table exists internally, eliminating duplication across CLI call sites (`status`, `schema`, `migrate`, `redo`, `reset`).
+- Extracted the duplicated migrations-directory existence check into a shared `require_migrations_dir` helper in `src/cli/guards.rs`, used by all six subcommands that need to read migration files (`status`, `schema`, `migrate`, `redo`, `reset`, `new`). The error message now includes a friendly hint: `"run \`stig init\` first"`.
+- `stig new` now returns exit code 4 (`Prerequisite`) when the migrations directory is missing, matching the other subcommands. Previously it returned exit code 2 (`Usage`).
+- Removed the redundant existence check from `discover()` in `src/migrate/discover.rs`. The CLI guard is now the single source of truth for this precondition; `discover()` relies on `read_dir()` to surface any TOCTOU races.
 
 ### Fixed
 

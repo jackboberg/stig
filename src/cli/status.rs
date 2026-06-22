@@ -9,14 +9,7 @@ use crate::snapshot;
 
 /// Run `stig status`.
 pub fn run(config: &Runtime) -> Result<()> {
-    let migrations_dir = config.migrations_path();
-    if !migrations_dir.is_dir() {
-        return Err(CliError::Prerequisite(format!(
-            "migrations directory not found: {}",
-            migrations_dir.display()
-        ))
-        .into());
-    }
+    let migrations_dir = super::guards::require_migrations_dir(config)?;
 
     let db = Db::open(config)
         .with_context(|| format!("failed to open database at {}", config.file.database_path))?;
