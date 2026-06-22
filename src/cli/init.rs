@@ -157,18 +157,10 @@ fn create_schema_manifest(config: &Runtime) -> anyhow::Result<()> {
 /// Open (or create) the database and ensure the `schema_migrations` table
 /// exists.
 ///
-/// Per SPEC §5: `checksum` has no DEFAULT so every applied migration must
-/// explicitly record its SHA-256.
+/// `Db::open` automatically ensures the `schema_migrations` table exists.
 fn bootstrap_database(config: &Runtime) -> anyhow::Result<()> {
-    let db = Db::open(config)
+    let _db = Db::open(config)
         .with_context(|| format!("failed to open database at {}", config.file.database_path))?;
-    db.connection().execute_batch(
-        "CREATE TABLE IF NOT EXISTS schema_migrations (
-            version    TEXT NOT NULL PRIMARY KEY,
-            checksum   TEXT NOT NULL,
-            applied_at TEXT NOT NULL DEFAULT (datetime('now'))
-        );",
-    )?;
     println!(
         "✓ created schema_migrations in {}",
         config.file.database_path

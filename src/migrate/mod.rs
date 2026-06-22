@@ -7,7 +7,7 @@ use std::path::Path;
 use anyhow::Context;
 
 use crate::config::Runtime;
-use crate::db::{Db, ensure_schema_migrations};
+use crate::db::Db;
 
 use self::discover::discover;
 use self::plan::Plan;
@@ -15,7 +15,7 @@ use self::plan::Plan;
 /// Discover migration files, build a plan, and apply all pending migrations.
 ///
 /// The caller provides an already-open [`Db`]; this function handles
-/// `ensure_schema_migrations`, discovery, planning, and application.
+/// discovery, planning, and application.
 ///
 /// This is the shared implementation used by both `stig redo` and `stig reset`.
 /// Note: the schema-manifest fast path is intentionally NOT used here — it is
@@ -23,8 +23,6 @@ use self::plan::Plan;
 /// After a snapshot restore (`redo`), the database may already contain schema
 /// from prior migrations, so applying the full manifest would fail.
 pub fn reapply_pending(db: &Db, config: &Runtime, migrations_dir: &Path) -> anyhow::Result<()> {
-    ensure_schema_migrations(db.connection())?;
-
     let files = discover(migrations_dir).context("failed to discover migration files")?;
     let plan = Plan::build(&files, db.connection())?;
 

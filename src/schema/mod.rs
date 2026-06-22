@@ -491,9 +491,6 @@ mod tests {
         std::fs::write(config.schema_file_path(), content).unwrap();
 
         let db = Db::open(&config).unwrap();
-        db.connection().execute_batch(
-            "CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')));",
-        ).unwrap();
 
         let result = apply_schema_manifest(&db, &config);
         assert!(result.is_err());
@@ -521,9 +518,6 @@ mod tests {
         std::fs::write(config.schema_file_path(), content).unwrap();
 
         let db = Db::open(&config).unwrap();
-        db.connection().execute_batch(
-            "CREATE TABLE schema_migrations (version TEXT PRIMARY KEY, checksum TEXT NOT NULL, applied_at TEXT NOT NULL DEFAULT (datetime('now')));",
-        ).unwrap();
 
         let count = apply_schema_manifest(&db, &config).unwrap();
         assert_eq!(count, 1);

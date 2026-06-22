@@ -2,7 +2,7 @@ use anyhow::Context;
 
 use crate::cli::SchemaCommand;
 use crate::config::Runtime;
-use crate::db::{Db, ensure_schema_migrations};
+use crate::db::Db;
 use crate::errors::CliError;
 use crate::migrate::discover::discover;
 use crate::schema::diff;
@@ -22,8 +22,6 @@ pub fn run(command: SchemaCommand, config: &Runtime) -> anyhow::Result<()> {
 
     let db = Db::open(config)
         .with_context(|| format!("failed to open database at {}", config.file.database_path))?;
-
-    ensure_schema_migrations(db.connection())?;
 
     let files = discover(&migrations_dir).context("failed to discover migration files")?;
 
