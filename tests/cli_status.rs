@@ -224,3 +224,30 @@ fn status_snapshot_pruned() {
     let output = status_output(&dir);
     insta::assert_snapshot!("snapshot_pruned", output);
 }
+
+// auto_snapshot=off — snapshot column shows "no" instead of "pruned"
+#[test]
+fn status_auto_snapshot_off_shows_no() {
+    let dir = TempDir::new().unwrap();
+
+    let config = indoc::indoc! {r#"
+        database_path  = "app.db"
+        migrations_dir = "db/migrations"
+        backups_dir    = "db"
+        auto_snapshot  = false
+    "#};
+    std::fs::write(dir.path().join("stig.toml"), config).unwrap();
+    std::fs::create_dir_all(dir.path().join("db/migrations")).unwrap();
+    std::fs::create_dir_all(dir.path().join("db/snapshots")).unwrap();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_users",
+        "CREATE TABLE users (id INTEGER);",
+    );
+    stig_cmd(&dir).arg("migrate").assert().success();
+
+    let output = status_output(&dir);
+    insta::assert_snapshot!("auto_snapshot_off", output);
+}

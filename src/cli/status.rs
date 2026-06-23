@@ -67,8 +67,10 @@ pub fn run(config: &Runtime) -> Result<()> {
                 };
                 let snap = if snapshot::snapshot_exists(&entry.version, &snapshots_dir) {
                     "yes"
-                } else {
+                } else if config.snapshots_enabled() {
                     "pruned"
+                } else {
+                    "no"
                 };
                 ("yes", drift_display, snap)
             }
