@@ -346,3 +346,34 @@ fn reset_declined_then_accepted() {
     assert!(table_exists(&dir, "foo"));
     assert_eq!(count_reset_files(&dir), 1);
 }
+
+// In-memory database is rejected before any backup/db work.
+#[test]
+fn reset_exits_2_with_in_memory_database() {
+    let dir = TempDir::new().unwrap();
+
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_foo",
+        "CREATE TABLE foo (id INTEGER);",
+    );
+
+    stig_cmd(&dir)
+        .env("STIG_DATABASE_PATH", ":memory:")
+        .arg("reset")
+        .arg("--yes")
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "cannot reset an in-memory database",
+        ));
+
+    assert!(
+        !dir.path().join(":memory:").exists(),
+        "in-memory database should not create a file on disk"
+    );
+}

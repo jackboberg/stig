@@ -12,6 +12,7 @@ use crate::snapshot;
 
 /// Run `stig redo [<version>] [--yes]`.
 pub fn run(version: Option<String>, yes: bool, config: &Runtime) -> anyhow::Result<()> {
+    super::guards::require_persistent_db(config, super::guards::PersistentDbCommand::Redo)?;
     let migrations_dir = super::guards::require_migrations_dir(config)?;
 
     let snapshots_dir = config.snapshots_path();

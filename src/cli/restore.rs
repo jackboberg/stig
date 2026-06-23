@@ -13,9 +13,7 @@ use crate::snapshot;
 /// recent reset backup is used. With a timestamp, the matching
 /// `reset-<timestamp>.db` file is used.
 pub fn run(timestamp: Option<String>, yes: bool, config: &Runtime) -> anyhow::Result<()> {
-    if config.is_memory_db() {
-        return Err(CliError::Usage("cannot restore an in-memory database".to_string()).into());
-    }
+    super::guards::require_persistent_db(config, super::guards::PersistentDbCommand::Restore)?;
 
     let db_path = config.db_path();
     let resets_dir = config.resets_path();

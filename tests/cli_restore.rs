@@ -249,3 +249,27 @@ fn restore_with_yes_flag_runs_without_prompt() {
     let name: String = query_value(&dir, "SELECT name FROM users WHERE id = 1");
     assert_eq!(name, "test");
 }
+
+// In-memory database is rejected before any backup lookup.
+#[test]
+fn restore_exits_2_with_in_memory_database() {
+    let dir = TempDir::new().unwrap();
+
+    stig_cmd(&dir).arg("init").assert().success();
+
+    stig_cmd(&dir)
+        .env("STIG_DATABASE_PATH", ":memory:")
+        .arg("restore")
+        .arg("--yes")
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "cannot restore an in-memory database",
+        ));
+
+    assert!(
+        !dir.path().join(":memory:").exists(),
+        "in-memory database should not create a file on disk"
+    );
+}
