@@ -470,6 +470,14 @@ impl Runtime {
         self.file.database_path == ":memory:"
     }
 
+    /// Whether automatic pre-migration snapshots are enabled.
+    ///
+    /// Returns `false` when `auto_snapshot` is disabled or the database is
+    /// in-memory (`:memory:`), since snapshots cannot be taken in either case.
+    pub fn snapshots_enabled(&self) -> bool {
+        self.file.auto_snapshot && !self.is_memory_db()
+    }
+
     /// Resolved path to the migrations directory.
     pub fn migrations_path(&self) -> PathBuf {
         self.resolve_path(&self.file.migrations_dir)
@@ -1211,5 +1219,41 @@ mod tests {
         assert_eq!(cfg.resets_path(), PathBuf::from("/srv/backups/resets"));
         assert_eq!(cfg.schema_file_path(), PathBuf::from("/etc/app/schema.sql"));
         assert!(!cfg.is_memory_db());
+    }
+
+    #[test]
+    fn snapshots_enabled_true_when_auto_snapshot_on_and_disk_db() {
+        let dir = TempDir::new().unwrap();
+        let cfg = Runtime {
+            project_root: dir.path().to_path_buf(),
+            file: ConfigFile::default(),
+        };
+        assert!(cfg.snapshots_enabled());
+    }
+
+    #[test]
+    fn snapshots_enabled_false_when_auto_snapshot_off() {
+        let dir = TempDir::new().unwrap();
+        let cfg = Runtime {
+            project_root: dir.path().to_path_buf(),
+            file: ConfigFile {
+                auto_snapshot: false,
+                ..ConfigFile::default()
+            },
+        };
+        assert!(!cfg.snapshots_enabled());
+    }
+
+    #[test]
+    fn snapshots_enabled_false_when_memory_db() {
+        let dir = TempDir::new().unwrap();
+        let cfg = Runtime {
+            project_root: dir.path().to_path_buf(),
+            file: ConfigFile {
+                database_path: ":memory:".to_string(),
+                ..ConfigFile::default()
+            },
+        };
+        assert!(!cfg.snapshots_enabled());
     }
 }
