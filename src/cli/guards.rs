@@ -22,6 +22,18 @@ pub fn require_migrations_dir(config: &Runtime) -> anyhow::Result<PathBuf> {
     Ok(dir)
 }
 
+/// Return an error if the configured database is in-memory.
+///
+/// Commands that copy or move the database file cannot operate on a
+/// `:memory:` database. Using a shared helper keeps the error message and
+/// exit code consistent.
+pub fn require_persistent_db(config: &Runtime, command: &str) -> anyhow::Result<()> {
+    if config.is_memory_db() {
+        return Err(CliError::Usage(format!("cannot {command} an in-memory database")).into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -78,5 +90,29 @@ mod tests {
         let err = require_migrations_dir(&config).unwrap_err();
         let cli_err = err.downcast_ref::<CliError>().expect("should be CliError");
         assert!(matches!(cli_err, CliError::Prerequisite(_)));
+    }
+
+    #[test]
+    fn persistent_db_succeeds() {
+        let tmp = TempDir::new().unwrap();
+        let config = runtime_with_migrations_dir(tmp.path());
+        require_persistent_db(&config, "redo").unwrap();
+    }
+
+    #[test]
+    fn memory_db_returns_usage_error() {
+        let tmp = TempDir::new().unwrap();
+        let mut config = runtime_with_migrations_dir(tmp.path());
+        config.file.database_path = ":memory:".to_string();
+
+        let err = require_persistent_db(&config, "redo").unwrap_err();
+        let cli_err = err.downcast_ref::<CliError>().expect("should be CliError");
+        assert!(matches!(cli_err, CliError::Usage(_)));
+        assert_eq!(cli_err.exit_code(), 2);
+        assert!(
+            cli_err
+                .to_string()
+                .contains("cannot redo an in-memory database")
+        );
     }
 }

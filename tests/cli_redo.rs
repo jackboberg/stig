@@ -382,3 +382,29 @@ fn redo_does_not_use_schema_manifest_fast_path() {
     assert!(table_exists(&dir, "articles"));
     assert_eq!(count_schema_migrations(&dir), 2);
 }
+
+// In-memory database is rejected before any snapshot/db work.
+#[test]
+fn redo_exits_2_with_in_memory_database() {
+    let dir = TempDir::new().unwrap();
+
+    stig_cmd(&dir).arg("init").assert().success();
+
+    write_migration(
+        &dir,
+        "20240101000000",
+        "create_users",
+        "CREATE TABLE users (id INTEGER);",
+    );
+
+    stig_cmd(&dir)
+        .env("STIG_DATABASE_PATH", ":memory:")
+        .arg("redo")
+        .arg("--yes")
+        .assert()
+        .failure()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "cannot redo an in-memory database",
+        ));
+}
