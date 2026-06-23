@@ -10,7 +10,7 @@ use crate::snapshot;
 
 /// Run `stig reset [--yes]`.
 pub fn run(yes: bool, config: &Runtime) -> anyhow::Result<()> {
-    super::guards::require_persistent_db(config, "reset")?;
+    super::guards::require_persistent_db(config, super::guards::PersistentDbCommand::Reset)?;
     let migrations_dir = super::guards::require_migrations_dir(config)?;
 
     super::prompt::confirm_or_abort(

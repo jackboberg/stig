@@ -371,4 +371,9 @@ fn reset_exits_2_with_in_memory_database() {
         .stderr(predicate::str::contains(
             "cannot reset an in-memory database",
         ));
+
+    assert!(
+        !dir.path().join(":memory:").exists(),
+        "in-memory database should not create a file on disk"
+    );
 }

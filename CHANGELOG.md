@@ -25,7 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `redo`, `reset`, and `restore` now exit with code 2 (`Usage`) when `database_path` is `:memory:`, instead of producing confusing file-copy errors or silently creating a file named `:memory:`.
+- Extracted the existing `:memory:` rejection from `restore` into a shared `require_persistent_db` helper and applied it to `redo` and `reset`. `redo` and `reset` now exit with code 2 (`Usage`) when `database_path` is `:memory:`; `restore` behavior is unchanged.
 - `redo` now exits with code 2 (`Declined`) when confirmation is run in a non-TTY environment, matching `reset`, `restore`, and `backups prune`.
 
 <!-- next-url -->
