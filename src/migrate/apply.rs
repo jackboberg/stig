@@ -16,20 +16,6 @@ use crate::snapshot;
 use super::directive::parse_directive;
 use super::plan::{Plan, PlannedMigration};
 
-/// Check whether the migration file contains a `stig: non-transactional`
-/// directive as the first meaningful line (after any blank lines or comments).
-pub fn has_non_transactional_directive(content: &str) -> bool {
-    parse_directive(content).is_non_transactional
-}
-
-/// Remove the `stig: non-transactional` directive line from `content`.
-///
-/// The directive must appear as the first meaningful line. If found, the
-/// directive line is removed and the remaining content is returned.
-pub fn strip_directive(content: &str) -> String {
-    parse_directive(content).sql
-}
-
 /// Check whether `sql` contains explicit transaction statements
 /// (`BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT`, or `RELEASE SAVEPOINT`).
 ///
