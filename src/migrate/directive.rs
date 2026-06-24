@@ -309,6 +309,36 @@ mod tests {
     }
 
     #[test]
+    fn directive_with_crlf_line_endings() {
+        let result = parse_directive("stig: non-transactional\r\nSELECT 1;\r\n");
+        assert!(result.is_non_transactional);
+        assert_eq!(result.sql, "SELECT 1;\r\n");
+    }
+
+    #[test]
+    fn directive_with_mixed_line_endings() {
+        let result = parse_directive("-- comment\r\nstig: non-transactional\nSELECT 1;\n");
+        assert!(result.is_non_transactional);
+        assert_eq!(result.sql, "-- comment\r\nSELECT 1;\n");
+    }
+
+    #[test]
+    fn directive_with_utf8_bom_prefix() {
+        let result = parse_directive("\u{FEFF}stig: non-transactional\nSELECT 1;\n");
+        assert!(!result.is_non_transactional);
+    }
+
+    #[test]
+    fn bom_on_comment_line_then_directive() {
+        let result = parse_directive("\u{FEFF}-- header\nstig: non-transactional\nSELECT 1;\n");
+        assert!(!result.is_non_transactional);
+        assert_eq!(
+            result.sql,
+            "\u{FEFF}-- header\nstig: non-transactional\nSELECT 1;\n"
+        );
+    }
+
+    #[test]
     fn strip_directive_comments_blanks_directive_sql() {
         let result = parse_directive(
             "-- header\n\nstig: non-transactional\n\nCREATE TABLE x (id INTEGER);\n",
