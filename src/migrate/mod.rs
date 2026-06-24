@@ -1,4 +1,5 @@
 pub mod apply;
+pub mod directive;
 pub mod discover;
 pub mod plan;
 
