@@ -18,6 +18,7 @@ pub struct DirectiveResult {
 pub fn parse_directive(content: &str) -> DirectiveResult {
     let mut in_block_comment = false;
     let mut directive_found = false;
+    let mut done_scanning = false;
     let mut result = String::with_capacity(content.len());
 
     for line in content.split_inclusive('\n') {
@@ -36,6 +37,11 @@ pub fn parse_directive(content: &str) -> DirectiveResult {
             continue;
         }
 
+        if done_scanning {
+            result.push_str(line);
+            continue;
+        }
+
         if in_block_comment {
             if let Some(end) = trimmed.find("*/") {
                 in_block_comment = false;
@@ -45,6 +51,9 @@ pub fn parse_directive(content: &str) -> DirectiveResult {
                     result.push_str(&trimmed[..end + 2]);
                     result.push('\n');
                     continue;
+                }
+                if !after.is_empty() {
+                    done_scanning = true;
                 }
             }
             result.push_str(line);
@@ -74,6 +83,12 @@ pub fn parse_directive(content: &str) -> DirectiveResult {
                     }
                     continue;
                 }
+                let before = trimmed_no_ws[..start].trim();
+                if !before.is_empty() || !after.is_empty() {
+                    done_scanning = true;
+                }
+                result.push_str(line);
+                continue;
             } else {
                 in_block_comment = true;
                 result.push_str(line);
@@ -86,6 +101,7 @@ pub fn parse_directive(content: &str) -> DirectiveResult {
             continue;
         }
 
+        done_scanning = true;
         result.push_str(line);
     }
 
@@ -245,5 +261,59 @@ mod tests {
     fn strip_directive_no_trailing_newline_in_input() {
         let result = parse_directive("stig: non-transactional\nSELECT 1");
         assert_eq!(result.sql, "SELECT 1");
+    }
+
+    #[test]
+    fn directive_after_sql_is_not_detected() {
+        let result = parse_directive("-- comment\nSELECT 1;\nstig: non-transactional\n");
+        assert!(!result.is_non_transactional);
+        assert_eq!(
+            result.sql,
+            "-- comment\nSELECT 1;\nstig: non-transactional\n"
+        );
+    }
+
+    #[test]
+    fn directive_after_sql_preserves_content() {
+        let result = parse_directive("SELECT 1;\nstig: non-transactional\n");
+        assert!(!result.is_non_transactional);
+        assert_eq!(result.sql, "SELECT 1;\nstig: non-transactional\n");
+    }
+
+    #[test]
+    fn only_blank_lines_returns_false() {
+        let result = parse_directive("\n\n\n");
+        assert!(!result.is_non_transactional);
+    }
+
+    #[test]
+    fn only_comments_returns_false() {
+        let result = parse_directive("-- a\n-- b\n-- c\n");
+        assert!(!result.is_non_transactional);
+    }
+
+    #[test]
+    fn strip_directive_strips_only_first_meaningful_line() {
+        let result = parse_directive(
+            "-- hdr\nstig: non-transactional\nSELECT 1;\nstig: non-transactional\n",
+        );
+        assert!(result.is_non_transactional);
+        assert_eq!(result.sql, "-- hdr\nSELECT 1;\nstig: non-transactional\n");
+    }
+
+    #[test]
+    fn strip_directive_handles_unclosed_block_comment() {
+        let result = parse_directive("/* stig: non-transactional\nSELECT 1;\n");
+        assert!(!result.is_non_transactional);
+        assert_eq!(result.sql, "/* stig: non-transactional\nSELECT 1;\n");
+    }
+
+    #[test]
+    fn strip_directive_comments_blanks_directive_sql() {
+        let result = parse_directive(
+            "-- header\n\nstig: non-transactional\n\nCREATE TABLE x (id INTEGER);\n",
+        );
+        assert!(result.is_non_transactional);
+        assert_eq!(result.sql, "-- header\n\n\nCREATE TABLE x (id INTEGER);\n");
     }
 }
