@@ -17,7 +17,7 @@ use sqlparser::parser::Parser;
 
 use crate::config::Pragmas;
 use crate::db::ensure_schema_migrations;
-use crate::migrate::apply::{has_non_transactional_directive, strip_directive};
+use crate::migrate::directive::parse_directive;
 use crate::migrate::discover::MigrationFile;
 
 // ---------------------------------------------------------------------------
@@ -136,11 +136,10 @@ fn build_baseline(
         let content = std::fs::read_to_string(&file.path)
             .with_context(|| format!("failed to read migration file: {}", file.path.display()))?;
 
-        let is_non_tx = has_non_transactional_directive(&content);
+        let directive = parse_directive(&content);
 
-        if is_non_tx {
-            let sql = strip_directive(&content);
-            conn.execute_batch(&sql)
+        if directive.is_non_transactional {
+            conn.execute_batch(&directive.sql)
                 .with_context(|| format!("failed to apply migration: {}", file.path.display()))?;
         } else {
             let sql = format!("BEGIN TRANSACTION;\n{content}\nCOMMIT;");
