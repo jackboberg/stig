@@ -30,7 +30,7 @@ pub fn run(target_name: Option<String>, config: &Runtime) -> Result<()> {
             .path
             .strip_prefix(&config.project_root)
             .unwrap_or(&output.path);
-        println!("\u{2713} {}", display_path.display());
+        crate::success!("{}", display_path.display());
     }
 
     Ok(())

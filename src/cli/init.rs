@@ -100,7 +100,7 @@ fn write_config(config: &Runtime, config_path: &Path, project_root: &Path) -> an
         .strip_prefix(project_root)
         .unwrap_or(config_path)
         .display();
-    println!("✓ wrote {display}");
+    crate::success!("wrote {display}");
     Ok(())
 }
 
@@ -108,7 +108,7 @@ fn write_config(config: &Runtime, config_path: &Path, project_root: &Path) -> an
 fn create_migrations_dir(config: &Runtime) -> anyhow::Result<()> {
     let dir = config.migrations_path();
     std::fs::create_dir_all(&dir).with_context(|| format!("failed to create {}", dir.display()))?;
-    println!("✓ created {}/", config.file.migrations_dir);
+    crate::success!("created {}/", config.file.migrations_dir);
     Ok(())
 }
 
@@ -124,8 +124,8 @@ fn create_backups_dir(config: &Runtime) -> anyhow::Result<()> {
                 .with_context(|| format!("failed to write {}", gitignore.display()))?;
         }
     }
-    println!(
-        "✓ created {}/{{snapshots,resets}}/ (gitignored)",
+    crate::success!(
+        "created {}/{{snapshots,resets}}/ (gitignored)",
         config.file.backups_dir
     );
     Ok(())
@@ -150,7 +150,7 @@ fn create_schema_manifest(config: &Runtime) -> anyhow::Result<()> {
     }
     schema::write_schema_sql(config, "")
         .with_context(|| "failed to create schema manifest".to_string())?;
-    println!("✓ created {}", config.file.schema_path);
+    crate::success!("created {}", config.file.schema_path);
     Ok(())
 }
 
@@ -161,9 +161,6 @@ fn create_schema_manifest(config: &Runtime) -> anyhow::Result<()> {
 fn bootstrap_database(config: &Runtime) -> anyhow::Result<()> {
     let _db = Db::open(config)
         .with_context(|| format!("failed to open database at {}", config.file.database_path))?;
-    println!(
-        "✓ created schema_migrations in {}",
-        config.file.database_path
-    );
+    crate::success!("created schema_migrations in {}", config.file.database_path);
     Ok(())
 }

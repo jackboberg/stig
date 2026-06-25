@@ -67,7 +67,7 @@ fn prune(yes: bool, config: &Runtime) -> anyhow::Result<()> {
     snapshot::prune_resets(&resets_dir, config.file.reset_keep)
         .context("failed to prune reset backups")?;
 
-    println!("✓ backups pruned");
+    crate::success!("backups pruned");
 
     Ok(())
 }

@@ -39,7 +39,7 @@ pub fn run(version: Option<String>, yes: bool, config: &Runtime) -> anyhow::Resu
         .with_context(|| format!("failed to open database at {}", config.file.database_path))?;
     migrate::reapply_pending(&db, config, &migrations_dir)?;
 
-    println!("✓ redo complete");
+    crate::success!("redo complete");
 
     Ok(())
 }

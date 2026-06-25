@@ -33,8 +33,8 @@ pub fn run(timestamp: Option<String>, yes: bool, config: &Runtime) -> anyhow::Re
     snapshot::restore_reset_backup_from_path(&backup_path, &db_path)
         .with_context(|| format!("failed to restore {}", backup_path.display()))?;
 
-    println!(
-        "✓ restored database from {}",
+    crate::success!(
+        "restored database from {}",
         backup_path.file_name().unwrap().to_string_lossy()
     );
 

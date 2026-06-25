@@ -39,17 +39,17 @@ pub fn run(dry_run: bool, config: &Runtime) -> anyhow::Result<()> {
     {
         let n_applied = schema::apply_schema_manifest(&db, config)
             .context("failed to apply schema manifest")?;
-        println!(
-            "✓ applied {} ({n_applied} migrations marked as applied)",
+        crate::success!(
+            "applied {} ({n_applied} migrations marked as applied)",
             config.file.schema_path
         );
     } else {
         apply::apply_pending(&db, &plan, config, dry_run)?;
 
         if dry_run {
-            println!("✓ {n_pending} would be applied, {n_already} already up to date");
+            crate::success!("{n_pending} would be applied, {n_already} already up to date");
         } else {
-            println!("✓ {n_pending} applied, {n_already} already up to date");
+            crate::success!("{n_pending} applied, {n_already} already up to date");
 
             if n_pending > 0 {
                 let plan_after = Plan::build(&files, db.connection())?;
