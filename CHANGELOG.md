@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `stig status` now distinguishes never-taken snapshots from pruned ones. The snapshot column shows `"no"` when snapshots are disabled (`auto_snapshot = false` or `:memory:` database) and `"pruned"` only when a snapshot was actually taken and later removed.
+- Unified checkmark glyph usage across CLI output via a shared `success!` macro (#80).
+- `stig generate` now prints a visible message when no codegen targets are configured (#81).
+- Schema manifest INSERT statements now escape string literals defensively (#84).
+- Migration discovery now recognizes `.sql` extensions regardless of case (#85).
+- Error context for migrations-directory reads distinguishes the initial open from per-entry failures (#86).
 - Extracted the existing `:memory:` rejection from `restore` into a shared `require_persistent_db` helper and applied it to `redo` and `reset`. `redo` and `reset` now exit with code 2 (`Usage`) when `database_path` is `:memory:`; `restore` behavior is unchanged.
 - `redo` now exits with code 2 (`Declined`) when confirmation is run in a non-TTY environment, matching `reset`, `restore`, and `backups prune`.
 
