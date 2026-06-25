@@ -59,7 +59,7 @@ pub fn discover(migrations_dir: &Path) -> Result<Vec<MigrationFile>> {
         .collect::<Result<Vec<_>, _>>()
         .with_context(|| {
             format!(
-                "failed to read migrations directory: {}",
+                "failed to read entry in migrations directory: {}",
                 migrations_dir.display()
             )
         })?;
@@ -275,6 +275,24 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("failed to read migrations directory")
+        );
+    }
+
+    #[test]
+    fn discover_file_path_returns_error_with_context() {
+        let tmp = make_dir();
+        let file_path = tmp.path().join("not_a_directory");
+        std::fs::write(&file_path, "").unwrap();
+
+        let err = discover(&file_path).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("failed to read migrations directory"),
+            "error missing context: {msg}"
+        );
+        assert!(
+            msg.contains(&file_path.display().to_string()),
+            "error missing path: {msg}"
         );
     }
 
