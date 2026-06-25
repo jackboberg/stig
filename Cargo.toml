@@ -48,8 +48,9 @@ allow-branch = ["main"]
 publish = false
 push = true
 consolidate-commits = true
+shared-version = true
 pre-release-commit-message = "chore: release v{{version}}"
-tag-message = "chore: release v{{version}}"
+tag-message = "chore: release {{tag_name}}"
 
 [[package.metadata.release.pre-release-replacements]]
 file = "CHANGELOG.md"
