@@ -177,6 +177,14 @@ pub fn write_schema_sql(config: &Runtime, sql: &str) -> Result<()> {
 
 /// Generate the schema SQL by querying `sqlite_master` for all DDL statements.
 ///
+/// Escape a string for safe use as a single-quoted SQL string literal.
+///
+/// Doubles every `'` character. Callers must still supply the surrounding
+/// quotes.
+fn sql_string_literal(s: &str) -> String {
+    s.replace('\'', "''")
+}
+
 /// Excludes internal SQLite objects (`sqlite_%`) and the `schema_migrations`
 /// tracking table. Returns statements in dependency-safe order: tables first,
 /// then views, then indexes, then triggers. Each statement is terminated with
@@ -232,8 +240,10 @@ pub fn generate_schema_sql(conn: &Connection, files: &[MigrationFile]) -> Result
         let content = std::fs::read_to_string(&file.path)
             .with_context(|| format!("failed to read migration file: {}", file.path.display()))?;
         let checksum = sha256_hex(content.as_bytes());
+        let version_lit = sql_string_literal(&version);
+        let checksum_lit = sql_string_literal(&checksum);
         parts.push(format!(
-            "INSERT INTO schema_migrations (version, checksum) VALUES ('{version}', '{checksum}');"
+            "INSERT INTO schema_migrations (version, checksum) VALUES ('{version_lit}', '{checksum_lit}');"
         ));
     }
 
@@ -427,6 +437,30 @@ mod tests {
         assert!(sql.contains("INSERT INTO schema_migrations"));
         assert!(sql.contains("20240101000000_alpha"));
         assert!(sql.contains("checksum"));
+    }
+
+    #[test]
+    fn generate_schema_sql_escapes_string_literals() {
+        let dir = TempDir::new().unwrap();
+        let conn = Connection::open_in_memory().unwrap();
+
+        let path = dir.path().join("20240101000000_o'reilly.sql");
+        std::fs::write(&path, "").unwrap();
+        let file = MigrationFile {
+            timestamp: "20240101000000".to_string(),
+            slug: "o'reilly".to_string(),
+            path,
+        };
+
+        let sql = generate_schema_sql(&conn, &[file]).unwrap();
+        assert!(
+            sql.contains("VALUES ('20240101000000_o''reilly',"),
+            "version literal was not escaped: {sql}"
+        );
+        assert!(
+            !sql.contains("VALUES ('20240101000000_o'reilly',"),
+            "unescaped single quote found: {sql}"
+        );
     }
 
     #[test]
