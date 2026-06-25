@@ -75,7 +75,7 @@ pub fn discover(migrations_dir: &Path) -> Result<Vec<MigrationFile>> {
             continue;
         }
         match path.extension().and_then(|e| e.to_str()) {
-            Some("sql") => {}
+            Some(ext) if ext.eq_ignore_ascii_case("sql") => {}
             _ => continue,
         }
 
@@ -333,6 +333,26 @@ mod tests {
 
         let result = discover(tmp.path()).unwrap();
         assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn discover_uppercase_sql_extension_is_recognized() {
+        let tmp = make_dir();
+        touch(tmp.path(), "20240528120000_init.SQL");
+
+        let result = discover(tmp.path()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].slug, "init");
+    }
+
+    #[test]
+    fn discover_mixed_case_sql_extension_is_recognized() {
+        let tmp = make_dir();
+        touch(tmp.path(), "20240528120000_init.Sql");
+
+        let result = discover(tmp.path()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].slug, "init");
     }
 
     #[test]
