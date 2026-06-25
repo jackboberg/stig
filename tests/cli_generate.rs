@@ -87,8 +87,13 @@ fn generate_no_targets_configured() {
     let dir = TempDir::new().unwrap();
     stig_cmd(&dir).arg("init").assert().success();
 
-    // No [[generate]] entries — should succeed silently.
-    stig_cmd(&dir).arg("generate").assert().success();
+    // No [[generate]] entries — should succeed with a visible message.
+    let output = stig_cmd(&dir).arg("generate").assert().success();
+    let stdout = std::str::from_utf8(&output.get_output().stdout).unwrap();
+    assert!(
+        stdout.contains("no codegen targets configured"),
+        "stdout: {stdout}"
+    );
 }
 
 #[test]
