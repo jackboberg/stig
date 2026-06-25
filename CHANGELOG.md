@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-header -->
 
+## [0.3.0] - 2026-06-25
+
 ## [Unreleased] - ReleaseDate
 
 ### Added
@@ -36,7 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `redo` now exits with code 2 (`Declined`) when confirmation is run in a non-TTY environment, matching `reset`, `restore`, and `backups prune`.
 
 <!-- next-url -->
-[Unreleased]: https://github.com/jackboberg/stig/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/jackboberg/stig/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/jackboberg/stig/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/jackboberg/stig/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/jackboberg/stig/releases/tag/v0.1.0
 
