@@ -1,3 +1,11 @@
+/// Print a success line prefixed with the checkmark glyph.
+#[macro_export]
+macro_rules! success {
+    ($($arg:tt)*) => {
+        ::std::println!("✓ {}", ::std::format_args!($($arg)*))
+    };
+}
+
 pub mod backups;
 pub mod generate;
 pub mod guards;

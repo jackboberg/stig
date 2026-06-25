@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use tracing::info;
 
 use crate::codegen;
 use crate::config::Runtime;
@@ -9,7 +8,7 @@ use crate::errors::CliError;
 /// Run `stig generate [target-name]`.
 pub fn run(target_name: Option<String>, config: &Runtime) -> Result<()> {
     if config.file.generate.is_empty() {
-        info!("no codegen targets configured");
+        println!("no codegen targets configured");
         return Ok(());
     }
 
@@ -30,7 +29,7 @@ pub fn run(target_name: Option<String>, config: &Runtime) -> Result<()> {
             .path
             .strip_prefix(&config.project_root)
             .unwrap_or(&output.path);
-        println!("\u{2713} {}", display_path.display());
+        crate::success!("{}", display_path.display());
     }
 
     Ok(())

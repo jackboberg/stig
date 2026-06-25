@@ -51,7 +51,7 @@ pub fn run(yes: bool, config: &Runtime) -> anyhow::Result<()> {
         return Err(e);
     }
 
-    println!("✓ reset complete");
+    crate::success!("reset complete");
 
     snapshot::prune_resets(&resets_dir, config.file.reset_keep)
         .context("failed to prune reset backups")?;
@@ -72,8 +72,8 @@ fn reapply_pending_with_fast_path(config: &Runtime, migrations_dir: &Path) -> an
     if schema::schema_has_content(config) && schema::schema_is_fresh(config, &files) {
         let n = schema::apply_schema_manifest(&db, config)
             .context("failed to apply schema manifest")?;
-        println!(
-            "✓ applied {} ({n} migrations marked as applied)",
+        crate::success!(
+            "applied {} ({n} migrations marked as applied)",
             config.file.schema_path
         );
     } else {

@@ -59,7 +59,7 @@ pub fn discover(migrations_dir: &Path) -> Result<Vec<MigrationFile>> {
         .collect::<Result<Vec<_>, _>>()
         .with_context(|| {
             format!(
-                "failed to read migrations directory: {}",
+                "failed to read entry in migrations directory: {}",
                 migrations_dir.display()
             )
         })?;
@@ -75,7 +75,7 @@ pub fn discover(migrations_dir: &Path) -> Result<Vec<MigrationFile>> {
             continue;
         }
         match path.extension().and_then(|e| e.to_str()) {
-            Some("sql") => {}
+            Some(ext) if ext.eq_ignore_ascii_case("sql") => {}
             _ => continue,
         }
 
@@ -279,6 +279,24 @@ mod tests {
     }
 
     #[test]
+    fn discover_file_path_returns_error_with_context() {
+        let tmp = make_dir();
+        let file_path = tmp.path().join("not_a_directory");
+        std::fs::write(&file_path, "").unwrap();
+
+        let err = discover(&file_path).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("failed to read migrations directory"),
+            "error missing context: {msg}"
+        );
+        assert!(
+            msg.contains(&file_path.display().to_string()),
+            "error missing path: {msg}"
+        );
+    }
+
+    #[test]
     fn discover_empty_dir_returns_empty_vec() {
         let tmp = make_dir();
         let result = discover(tmp.path()).unwrap();
@@ -333,6 +351,26 @@ mod tests {
 
         let result = discover(tmp.path()).unwrap();
         assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn discover_uppercase_sql_extension_is_recognized() {
+        let tmp = make_dir();
+        touch(tmp.path(), "20240528120000_init.SQL");
+
+        let result = discover(tmp.path()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].slug, "init");
+    }
+
+    #[test]
+    fn discover_mixed_case_sql_extension_is_recognized() {
+        let tmp = make_dir();
+        touch(tmp.path(), "20240528120000_init.Sql");
+
+        let result = discover(tmp.path()).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].slug, "init");
     }
 
     #[test]

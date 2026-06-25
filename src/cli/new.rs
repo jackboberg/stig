@@ -33,7 +33,7 @@ pub fn run(description: String, no_edit: bool, config: &Runtime) -> anyhow::Resu
         .strip_prefix(&config.project_root)
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|_| path.clone());
-    println!("✓ {}", display.display());
+    crate::success!("{}", display.display());
 
     if !no_edit
         && let Ok(editor) = std::env::var("EDITOR")

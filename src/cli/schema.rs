@@ -32,7 +32,7 @@ pub fn run(command: SchemaCommand, config: &Runtime) -> anyhow::Result<()> {
                 std::fs::write(&path, &sql)
                     .with_context(|| format!("failed to write migration to {}", path.display()))?;
                 let display_path = path.strip_prefix(&config.project_root).unwrap_or(&path);
-                println!("\u{2713} {}", display_path.display());
+                crate::success!("{}", display_path.display());
             } else {
                 print!("{sql}");
             }
